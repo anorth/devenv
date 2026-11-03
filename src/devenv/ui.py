@@ -1,7 +1,9 @@
-"""Log and warning output, and the error that ends a command."""
+"""Output for the user, and the error that ends a command."""
 
+import getpass
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 
 class Die(Exception):
@@ -14,6 +16,14 @@ def log(message: str) -> None:
 
 def warn(message: str) -> None:
     print(f"!!! {message}", file=sys.stderr, flush=True)
+
+
+def print_open_commands(host: str, path: Path) -> None:
+    """How to open a path on this machine from an editor on the tailnet."""
+    user = getpass.getuser()
+    print("\nOpen it:")
+    print(f"  cursor --remote ssh-remote+{user}@{host} {path}")
+    print(f"  zed ssh://{user}@{host}{path}")
 
 
 def guarded(command: Callable[[], None]) -> int:

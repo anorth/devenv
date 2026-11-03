@@ -24,10 +24,14 @@ def capture(cmd: list[str], stdin: str | None = None) -> subprocess.CompletedPro
 
 
 def call(cmd: list[str], cwd: Path | None = None, stdin: IO[bytes] | None = None) -> bool:
-    """Run with output going to the terminal; say whether it succeeded."""
+    """Run with output going to the terminal; say whether it succeeded.
+
+    Failing to start counts as failing: a command can be missing, or a script
+    can lack the shebang it needs to be executed.
+    """
     try:
         return subprocess.run(cmd, cwd=cwd, stdin=stdin).returncode == 0
-    except FileNotFoundError:
+    except OSError:
         return False
 
 

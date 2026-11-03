@@ -47,28 +47,35 @@ class Machine:
         path.write_text(f"#!/bin/sh\n{script}\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
+    def origin(self, name, files=None):
+        """A bare repo with one commit, outside the home, and its file:// URL."""
+        bare = self.home.parent / "origins" / f"{name}.git"
+        bare.parent.mkdir(exist_ok=True)
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True, env=self.env)
+        seed = self.home.parent / "seeds" / name
+        seed.mkdir(parents=True)
+        self._commit(seed, files)
+        git(seed, "remote", "add", "origin", str(bare))
+        git(seed, "push", "-q", "origin", "main")
+        return f"file://{bare}"
+
     def repo(self, rel="app", origin=False):
         """A main checkout with one commit, cloned from a bare origin if asked."""
         path = self.home / rel
         if origin:
-            bare = self.home.parent / "origins" / f"{path.name}.git"
-            bare.parent.mkdir(exist_ok=True)
-            subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True, env=self.env)
-            seed = self.home.parent / "seeds" / path.name
-            seed.mkdir(parents=True)
-            self._commit(seed)
-            git(seed, "remote", "add", "origin", str(bare))
-            git(seed, "push", "-q", "origin", "main")
+            url = self.origin(path.name)
             path.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(["git", "clone", "-q", str(bare), str(path)], check=True, env=self.env)
+            subprocess.run(["git", "clone", "-q", url, str(path)], check=True, env=self.env)
         else:
             path.mkdir(parents=True)
             self._commit(path)
         return path
 
-    def _commit(self, path):
+    def _commit(self, path, files=None):
         subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True, env=self.env)
         (path / "README").write_text("hello\n")
+        for name, content in (files or {}).items():
+            (path / name).write_text(content)
         subprocess.run(["git", "-C", str(path), "add", "."], check=True, env=self.env)
         subprocess.run(["git", "-C", str(path), "commit", "-qm", "first"], check=True, env=self.env)
 

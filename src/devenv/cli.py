@@ -4,8 +4,9 @@ import argparse
 from pathlib import Path
 
 from devenv.git import current_checkout
+from devenv.repos import add_repo, plan_checkout
 from devenv.setup import setup_checkout
-from devenv.ui import guarded
+from devenv.ui import guarded, log
 from devenv.worktrees import list_worktrees, new_worktree, remove_worktree
 
 DESCRIPTION = """\
@@ -38,6 +39,14 @@ def _wt_ls(args: argparse.Namespace) -> None:
 
 def _setup(args: argparse.Namespace) -> None:
     setup_checkout(Path(args.path))
+
+
+def _repo_add(args: argparse.Namespace) -> None:
+    path = plan_checkout(args.clone_url, args.dir)
+    if args.check:
+        log(f"This repo can be added at {path}")
+    else:
+        add_repo(args.clone_url, path, create_db=args.db, run_setup=args.setup)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -102,6 +111,50 @@ def _parser() -> argparse.ArgumentParser:
     )
     setup.add_argument("path", metavar="<path>", nargs="?", default=".", help="the checkout (default: .)")
     setup.set_defaults(run=_setup)
+
+    repo = commands.add_parser(
+        "repo",
+        help="add a repo to this machine",
+        description="Add repos to this machine as checkouts at ~/<dir> or ~/<group>/<dir>.",
+    )
+    repo_commands = repo.add_subparsers(metavar="<command>", required=True)
+
+    add = repo_commands.add_parser(
+        "add",
+        help="clone a repo and set it up",
+        description="Clone a repo, retrying while new access takes effect, then set it up: "
+        "copy .env.example to .env if there's no .env, then install tools and "
+        "dependencies and run ./setup.sh. A setup step that fails warns, and the rest "
+        "still run.",
+    )
+    add.add_argument(
+        "clone_url",
+        metavar="<clone-url>",
+        help="e.g. https://github.com/owner/name or git@github.com:owner/name.git",
+    )
+    add.add_argument(
+        "--dir",
+        metavar="<dir>|<group>/<dir>",
+        help="where under ~ to put it (default: the repo's name). Its databases are "
+        "named after the last part, which must differ from every other checkout's",
+    )
+    add.add_argument(
+        "--db",
+        action="store_true",
+        help="create a <dir>_dev database, which devenv wt new then copies for each worktree",
+    )
+    add.add_argument(
+        "--no-setup",
+        dest="setup",
+        action="store_false",
+        help="don't install tools or dependencies or run ./setup.sh",
+    )
+    add.add_argument(
+        "--check",
+        action="store_true",
+        help="only check that the repo can be added here, without cloning",
+    )
+    add.set_defaults(run=_repo_add)
     return parser
 
 

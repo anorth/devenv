@@ -57,5 +57,9 @@ def copy_database(source: str, target: str) -> None:
         raise Die(f"can't copy {source}: pg_dump or pg_restore failed")
 
 
+def create(name: str) -> bool:
+    return call(["createdb", name])
+
+
 def drop(name: str, force: bool = False) -> bool:
     return call(["dropdb", *(["--force"] if force else []), name])

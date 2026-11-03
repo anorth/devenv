@@ -9,6 +9,17 @@ from dataclasses import dataclass
 
 FIRST_PORT = 3001
 MAX_DB_NAME = 63
+_DIR_PART = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
+
+
+def repo_name(clone_url: str) -> str:
+    """A repo's name from an https://, file:// or git@host:owner/name clone URL."""
+    return re.split(r"[/:]", clone_url.rstrip("/"))[-1].removesuffix(".git")
+
+
+def valid_checkout_dir(path: str) -> bool:
+    """Whether a path under home fits the layout: <dir> or <group>/<dir>."""
+    return re.fullmatch(rf"({_DIR_PART}/)?{_DIR_PART}", path) is not None
 
 
 def slugify(text: str) -> str:
@@ -27,6 +38,10 @@ def template_db(checkout_dir: str) -> str:
 
 def worktree_db(checkout_dir: str, slug: str) -> str:
     return db_name(f"{checkout_dir}_{slug}")
+
+
+def database_url(db: str) -> str:
+    return f"postgres://localhost/{db}"
 
 
 def database_from_url(url: str) -> str:

@@ -132,3 +132,34 @@ def test_parse_tailnet_name():
     assert rules.parse_tailnet_name(json.dumps({**running, "BackendState": "Stopped"})) is None
     assert rules.parse_tailnet_name("not json") is None
     assert rules.parse_tailnet_name("{}") is None
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/o/n",
+        "https://github.com/o/n.git",
+        "https://github.com/o/n/",
+        "git@github.com:o/n",
+        "git@github.com:o/n.git",
+        "file:///tmp/origins/n.git",
+    ],
+)
+def test_repo_name(url):
+    assert rules.repo_name(url) == "n"
+
+
+def test_repo_name_keeps_dots_inside_the_name():
+    assert rules.repo_name("https://github.com/o/n.js.git") == "n.js"
+
+
+@pytest.mark.parametrize("path", ["x", "group/x", "My_App-2.0", "_x/y", "0"])
+def test_valid_checkout_dir(path):
+    assert rules.valid_checkout_dir(path)
+
+
+@pytest.mark.parametrize(
+    "path", ["", "a/b/c", "/x", "x/", "../x", "a/../b", ".hidden", "a/.b", "-x", "a b", "x\n", "a//b"]
+)
+def test_invalid_checkout_dir(path):
+    assert not rules.valid_checkout_dir(path)

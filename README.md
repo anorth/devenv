@@ -17,6 +17,7 @@ devenv wt new <branch> [--base <branch>]
 devenv wt rm <branch> [--force]
 devenv wt ls
 devenv setup [<path>]
+devenv repo add <clone-url> [--dir <dir>|<group>/<dir>] [--db] [--no-setup] [--check]
 ```
 
 Every command has `--help`. The exit status is 0 on success, 1 on errors and 2
@@ -47,6 +48,20 @@ branch.
 mise file, then one dependency install chosen by lockfile (pnpm, npm or yarn),
 then `uv sync` if there's a `uv.lock`. A step that fails warns, and the rest
 still run.
+
+**`devenv repo add`** clones a repo to `~/<dir>` or `~/<group>/<dir>`, by default
+named after the repo. A failed clone is retried for about 12 seconds, since new
+deploy keys take a moment to work. It refuses a path that already exists, a group
+that's a file, a repo or a checkout's worktree folder, and a name whose
+databases would clash with those of any existing checkout.
+
+- `--db` creates the `<dir>_dev` template database. If that fails it warns.
+- `.env.example` is copied to `.env` if there's no `.env`.
+- `devenv setup` then `./setup.sh` run unless you pass `--no-setup`. A step that
+  fails warns, and the rest still run.
+- `--check` makes only the refusal checks and exits 0 or 1, without cloning.
+
+The clone URL decides the access: HTTPS for a token, SSH for a deploy key.
 
 ## The layout contract
 

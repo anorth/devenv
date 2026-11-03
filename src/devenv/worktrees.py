@@ -1,6 +1,5 @@
 """Creating, removing and listing a checkout's worktrees."""
 
-import getpass
 import os
 import shutil
 from pathlib import Path
@@ -10,7 +9,7 @@ from devenv.envfile import env_file_get, env_file_set
 from devenv.git import Checkout, find_checkouts
 from devenv.setup import setup_checkout
 from devenv.system import capture, listening_ports, tailnet_name
-from devenv.ui import Die, log, warn
+from devenv.ui import Die, log, print_open_commands, warn
 
 
 def claimed_ports(checkout: Checkout) -> set[int]:
@@ -62,7 +61,7 @@ def _write_env(checkout: Checkout, path: Path, port: int, db: str | None) -> Non
         warn(f"{main_env} doesn't exist; the worktree's .env has only what devenv sets")
     env_file_set(env, "PORT", str(port))
     if db:
-        env_file_set(env, "DATABASE_URL", f"postgres://localhost/{db}")
+        env_file_set(env, "DATABASE_URL", rules.database_url(db))
 
 
 def _print_summary(checkout: Checkout, path: Path, branch: str, port: int, db: str | None) -> None:
@@ -82,10 +81,7 @@ def _print_summary(checkout: Checkout, path: Path, branch: str, port: int, db: s
     print(f"  url       {url}")
     print(f"  database  {db_note}")
     if host:
-        user = getpass.getuser()
-        print("\nOpen it:")
-        print(f"  cursor --remote ssh-remote+{user}@{host} {path}")
-        print(f"  zed ssh://{user}@{host}{path}")
+        print_open_commands(host, path)
 
 
 def new_worktree(checkout: Checkout, branch: str, base: str | None = None) -> None:
