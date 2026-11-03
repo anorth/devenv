@@ -1,0 +1,134 @@
+import json
+
+import pytest
+
+from devenv import rules
+from devenv.rules import Worktree
+from devenv.envfile import env_file_get, env_file_set
+
+
+@pytest.mark.parametrize(
+    "text, slug",
+    [
+        ("feat/x", "feat-x"),
+        ("Feat/Some_Thing", "feat-some-thing"),
+        ("--a..b//c--", "a-b-c"),
+        ("v1.2", "v1-2"),
+        ("///", ""),
+    ],
+)
+def test_slugify(text, slug):
+    assert rules.slugify(text) == slug
+
+
+def test_db_name_lowercases_and_replaces():
+    assert rules.db_name("My-App.v2_x") == "my_app_v2_x"
+
+
+def test_db_name_cuts_to_63():
+    assert rules.db_name("a" * 70) == "a" * 63
+    assert len(rules.worktree_db("repo", "b" * 80)) == 63
+
+
+def test_template_name_keeps_within_63():
+    assert rules.template_db("a" * 70) == "a" * 63
+    assert rules.template_db("a" * 60) == "a" * 60 + "_de"
+
+
+def test_template_and_worktree_names():
+    assert rules.template_db("My-App") == "my_app_dev"
+    assert rules.worktree_db("My-App", "feat-x") == "my_app_feat_x"
+
+
+@pytest.mark.parametrize(
+    "url, db",
+    [
+        ("postgres://localhost/app_x", "app_x"),
+        ("postgres://u:p@host:5432/app?sslmode=require", "app"),
+        ("", ""),
+    ],
+)
+def test_database_from_url(url, db):
+    assert rules.database_from_url(url) == db
+
+
+@pytest.mark.parametrize(
+    "text, value",
+    [
+        ("PORT=3001\n", "3001"),
+        ("export PORT=3001\n", "3001"),
+        ("export \t PORT=3001\n", "3001"),
+        ("PORT=\"3001\"\n", "3001"),
+        ("PORT='3001'\n", "3001"),
+        ("PORT=3001 # dev server\n", "3001"),
+        ("PORT=1\nOTHER=2\nPORT=3\n", "3"),
+        ("XPORT=1\nPORTS=2\n", ""),
+        ("# PORT=1\n", ""),
+        ("", ""),
+    ],
+)
+def test_env_get(text, value):
+    assert rules.env_get(text, "PORT") == value
+
+
+@pytest.mark.parametrize(
+    "text, result",
+    [
+        ("", "PORT=1\n"),
+        ("A=b\n", "A=b\nPORT=1\n"),
+        ("A=b", "A=b\nPORT=1\n"),
+        ("PORT=9\nA=b\n", "PORT=1\nA=b\n"),
+        ("export PORT=9\nA=b\n", "PORT=1\nA=b\n"),
+        ("PORT=9\nA=b\nPORT=8\nexport PORT=7\nC=d\n", "PORT=1\nA=b\nC=d\n"),
+        ("A=b\n\n# note\n\n", "A=b\n\n# note\nPORT=1\n"),
+        ("PORTS=9\n", "PORTS=9\nPORT=1\n"),
+    ],
+)
+def test_env_set(text, result):
+    assert rules.env_set(text, "PORT", "1") == result
+
+
+def test_env_file_missing(tmp_path):
+    env = tmp_path / ".env"
+    assert env_file_get(env, "PORT") == ""
+    env_file_set(env, "PORT", "3001")
+    assert env.read_text() == "PORT=3001\n"
+    assert env_file_get(env, "PORT") == "3001"
+
+
+def test_choose_port():
+    assert rules.choose_port(set()) == 3001
+    assert rules.choose_port({3001, 3002, 3004}) == 3003
+    assert rules.choose_port({80, 5432}) == 3001
+    assert rules.choose_port(set(range(3001, 65536))) is None
+
+
+def test_parse_listening_ports():
+    output = (
+        "LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\n"
+        "LISTEN 0 511 *:3002 *:*\n"
+        "LISTEN 0 511 [::1]:5432 [::]:*\n"
+        "LISTEN 0 511 0.0.0.0:3001 0.0.0.0:*\n"
+    )
+    assert rules.parse_listening_ports(output) == {53, 3002, 5432, 3001}
+
+
+def test_parse_worktree_list():
+    porcelain = (
+        "worktree /home/u/app\nHEAD abc\nbranch refs/heads/main\n\n"
+        "worktree /home/u/app-wt/feat-x\nHEAD def\nbranch refs/heads/feat/x\n\n"
+        "worktree /home/u/app-wt/old\nHEAD 123\ndetached\nprunable gitdir file missing\n\n"
+    )
+    assert rules.parse_worktree_list(porcelain) == [
+        Worktree("/home/u/app", "main"),
+        Worktree("/home/u/app-wt/feat-x", "feat/x"),
+        Worktree("/home/u/app-wt/old", None),
+    ]
+
+
+def test_parse_tailnet_name():
+    running = {"BackendState": "Running", "Self": {"DNSName": "glin.tail123.ts.net."}}
+    assert rules.parse_tailnet_name(json.dumps(running)) == "glin"
+    assert rules.parse_tailnet_name(json.dumps({**running, "BackendState": "Stopped"})) is None
+    assert rules.parse_tailnet_name("not json") is None
+    assert rules.parse_tailnet_name("{}") is None

@@ -1,0 +1,195 @@
+"""Worktree databases against the real Postgres; skipped when there isn't one."""
+
+import shutil
+import subprocess
+import time
+import uuid
+
+import pytest
+
+from conftest import git
+from devenv import postgres
+
+
+
+def sql(query):
+    return subprocess.run(
+        ["psql", "-X", "-At", "-d", "postgres", "-c", query], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def database_names():
+    return set(sql("SELECT datname FROM pg_database").splitlines())
+
+
+@pytest.fixture
+def repo(pg_machine):
+    """A checkout with a uniquely named directory and its <dir>_dev database."""
+    name = f"t{uuid.uuid4().hex[:10]}"
+    app = pg_machine.repo(name)
+    template = f"{name}_dev"
+    subprocess.run(["createdb", template], check=True)
+    yield app, name, template
+    for db in database_names():
+        if db.startswith(name):
+            subprocess.run(["dropdb", "--force", db], check=True)
+
+
+def test_new_and_rm_create_and_drop_the_database(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "feat/x", cwd=app)
+    db = f"{name}_feat_x"
+    assert db in database_names()
+    env = (pg_machine.home / f"{name}-wt/feat-x/.env").read_text()
+    assert f"DATABASE_URL=postgres://localhost/{db}\n" in env
+
+    pg_machine.ok("wt", "rm", "feat/x", cwd=app)
+    assert db not in database_names()
+
+
+def test_rm_leaves_a_database_the_env_doesnt_name(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    env = pg_machine.home / f"{name}-wt/a/.env"
+    env.write_text("DATABASE_URL=postgres://localhost/something_else\n")
+
+    result = pg_machine.ok("wt", "rm", "a", cwd=app)
+    assert f"!!! leaving database {name}_a: this worktree's .env doesn't use it." in result.stderr
+    assert f"{name}_a" in database_names()
+
+
+def test_locked_worktree_keeps_its_database(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    git(app, "worktree", "lock", str(pg_machine.home / f"{name}-wt/a"))
+    result = pg_machine.run("wt", "rm", "a", cwd=app)
+    assert result.returncode == 1
+    assert "git worktree remove failed" in result.stderr
+    assert f"{name}_a" in database_names()
+
+
+def test_branch_named_after_the_template_is_refused(pg_machine, repo):
+    app, name, template = repo
+    result = pg_machine.run("wt", "new", "dev", cwd=app)
+    assert result.returncode == 1
+    assert f"would use the name of the template database, {template}" in result.stderr
+    assert template in database_names()
+
+
+def test_rm_never_drops_the_template(pg_machine):
+    name = f"t{uuid.uuid4().hex[:10]}"
+    app = pg_machine.repo(name)
+    template = f"{name}_dev"
+    pg_machine.ok("wt", "new", "dev", cwd=app)  # before the template exists
+    subprocess.run(["createdb", template], check=True)
+    try:
+        pg_machine.ok("wt", "rm", "dev", cwd=app)
+        assert template in database_names()
+    finally:
+        subprocess.run(["dropdb", "--if-exists", template], check=True)
+
+
+def test_refuses_existing_database(pg_machine, repo):
+    app, name, _ = repo
+    subprocess.run(["createdb", f"{name}_a"], check=True)
+    result = pg_machine.run("wt", "new", "a", cwd=app)
+    assert result.returncode == 1
+    assert f"database {name}_a already exists. If nothing uses it, drop it with: dropdb {name}_a" in result.stderr
+    assert not (pg_machine.home / f"{name}-wt/a").exists()
+
+
+def hold_connection(db):
+    holder = subprocess.Popen(
+        ["psql", "-X", "-d", db, "-c", "SELECT pg_sleep(30)"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    query = f"SELECT count(*) FROM pg_stat_activity WHERE datname = '{db}'"
+    for _ in range(50):
+        if sql(query) != "0":
+            return holder
+        time.sleep(0.1)
+    holder.kill()
+    pytest.fail("the holding connection never appeared")
+
+
+def fill_template(template):
+    subprocess.run(
+        ["psql", "-X", "-q", "-d", template, "-c", "CREATE TABLE t (n int PRIMARY KEY); INSERT INTO t VALUES (7)"],
+        check=True,
+    )
+
+
+def test_copies_the_data(pg_machine, repo):
+    app, name, template = repo
+    fill_template(template)
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    copied = subprocess.run(
+        ["psql", "-X", "-At", "-d", f"{name}_a", "-c", "SELECT n FROM t"],
+        check=True, capture_output=True, text=True,
+    )
+    assert copied.stdout.strip() == "7"
+
+
+def test_copies_while_the_template_is_in_use(pg_machine, repo):
+    app, name, template = repo
+    fill_template(template)
+    holder = hold_connection(template)
+    try:
+        pg_machine.ok("wt", "new", "a", cwd=app)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert f"{name}_a" in database_names()
+    assert (pg_machine.home / f"{name}-wt/a").exists()
+
+
+@pytest.mark.parametrize("tool", ["pg_dump", "pg_restore"])
+def test_failed_copy_leaves_nothing_behind(pg_machine, repo, tool):
+    app, name, template = repo
+    pg_machine.stub(tool, "cat >/dev/null; echo boom >&2; exit 1")
+    result = pg_machine.run("wt", "new", "a", cwd=app)
+    assert result.returncode == 1
+    assert f"can't copy {template}: pg_dump or pg_restore failed" in result.stderr
+    assert f"{name}_a" not in database_names()
+    assert not (pg_machine.home / f"{name}-wt/a").exists()
+
+
+def test_rm_refuses_database_with_connections_unless_forced(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    db = f"{name}_a"
+    holder = hold_connection(db)
+    try:
+        result = pg_machine.run("wt", "rm", "a", cwd=app)
+        assert result.returncode == 1
+        assert f"database {db} has 1 active connection(s)" in result.stderr
+        assert (pg_machine.home / f"{name}-wt/a").exists()
+
+        pg_machine.ok("wt", "rm", "a", "--force", cwd=app)
+    finally:
+        holder.kill()
+        holder.wait()
+    assert db not in database_names()
+
+
+def test_failed_worktree_add_drops_the_database(pg_machine, repo):
+    app, name, _ = repo
+    # Fail only the worktree add, after the database has been made.
+    git_stub = pg_machine.bin / "git"
+    real_git = shutil.which("git")
+    git_stub.write_text(
+        f'#!/bin/sh\ncase "$*" in *"worktree add"*) exit 1;; esac\nexec {real_git} "$@"\n'
+    )
+    git_stub.chmod(0o755)
+
+    result = pg_machine.run("wt", "new", "a", cwd=app)
+    assert result.returncode == 1
+    assert "git worktree add failed" in result.stderr
+    assert f"{name}_a" not in database_names()
+
+
+def test_names_reach_sql_as_values(pg_machine):
+    assert not postgres.db_exists("it's'; DROP DATABASE postgres; --")
+    assert postgres.db_connections("it's") == 0
+    assert postgres.db_exists("postgres")
