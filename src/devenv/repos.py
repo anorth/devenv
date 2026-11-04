@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from devenv import postgres, rules
-from devenv.git import Checkout, find_checkouts
+from devenv.git import find_checkouts
 from devenv.setup import setup_checkout, try_step
 from devenv.system import call, tailnet_name
 from devenv.ui import Die, log, print_open_commands, warn
@@ -36,8 +36,6 @@ def plan_checkout(clone_url: str, dir_arg: str | None) -> Path:
     # Compare what's actually shared: my-app and my_app differ, but not in Postgres.
     template = rules.template_db(path.name)
     for checkout in find_checkouts(home):
-        if path.parent == Checkout(checkout).worktree_root:
-            raise Die(f"{path.parent} holds the worktrees of {checkout}. Pick another with --dir.")
         if rules.template_db(checkout.name) == template:
             raise Die(
                 f"the checkout at {checkout} would share databases with {path}. "
@@ -86,7 +84,7 @@ def _print_summary(path: Path, db: str | None, ran_setup: bool) -> None:
         print(f"\nDatabase for {path}/.env:\n  DATABASE_URL={rules.database_url(db)}")
     if not ran_setup:
         print(f"\nSetup was skipped. To finish it: devenv setup {path}, then ./setup.sh if it has one.")
-    print(f"\nWorktrees: cd {path} && devenv wt new <branch>")
+    print(f"\nWorktrees: cd {path} && devenv wt new <name>")
 
 
 def add_repo(clone_url: str, path: Path, *, create_db: bool, run_setup: bool) -> None:

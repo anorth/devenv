@@ -36,8 +36,8 @@ def template_db(checkout_dir: str) -> str:
     return db_name(f"{checkout_dir}_dev")
 
 
-def worktree_db(checkout_dir: str, slug: str) -> str:
-    return db_name(f"{checkout_dir}_{slug}")
+def worktree_db(checkout_dir: str, name: str) -> str:
+    return db_name(f"{checkout_dir}_{name}")
 
 
 def database_url(db: str) -> str:

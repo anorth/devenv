@@ -84,24 +84,27 @@ def _print_summary(checkout: Checkout, path: Path, branch: str, port: int, db: s
         print_open_commands(host, path)
 
 
-def new_worktree(checkout: Checkout, branch: str, base: str | None = None) -> None:
-    if capture(["git", "check-ref-format", "--branch", branch]).returncode != 0:
-        raise Die(f"not a valid branch name: {branch}")
-    slug = rules.slugify(branch)
+def new_worktree(
+    checkout: Checkout, name: str, branch: str | None = None, base: str | None = None
+) -> None:
+    slug = rules.slugify(name)
     if not slug:
-        raise Die(f"can't make a directory name from branch '{branch}'")
-    path = checkout.worktree_root / slug
+        raise Die(f"can't make a worktree name from '{name}'")
+    branch = branch or name
+    if capture(["git", "check-ref-format", "--branch", branch]).returncode != 0:
+        raise Die(f"not a valid branch name: {branch}. Choose one with --branch.")
+    path = checkout.worktree_path(slug)
     template = rules.template_db(checkout.dir)
     # Worktrees get a database only if the repo has one.
     db = rules.worktree_db(checkout.dir, slug) if postgres.db_exists(template) else None
     if db == template:
         raise Die(
-            f"branch {branch} would use the name of the template database, {template}. "
-            "Pick another branch name."
+            f"worktree {slug} would use the name of the template database, {template}. "
+            "Pick another name, and use --branch if you want that branch."
         )
 
     if path.exists() or path.is_symlink():
-        raise Die(f"{path} already exists (devenv wt ls shows worktrees)")
+        raise Die(f"{path} already exists. Pick another name.")
     existing = checkout.worktree_for_branch(branch)
     if existing:
         raise Die(f"branch {branch} is already checked out at {existing}")
@@ -115,7 +118,6 @@ def new_worktree(checkout: Checkout, branch: str, base: str | None = None) -> No
     if db:
         log(f"Copying database {template} to {db}")
         postgres.copy_database(template, db)
-    checkout.worktree_root.mkdir(parents=True, exist_ok=True)
     log(plan)
     if not checkout.git("worktree", "add", *add_args):
         if db and not postgres.drop(db):
@@ -148,14 +150,31 @@ def _merged_into(checkout: Checkout, branch: str, target: str) -> bool:
     )
 
 
-def remove_worktree(checkout: Checkout, branch: str, force: bool = False) -> None:
-    path = checkout.worktree_for_branch(branch)
-    if path is None:
-        raise Die(f"no worktree has branch {branch} checked out (devenv wt ls)")
+def _delete_branch_if_merged(checkout: Checkout, branch: str) -> None:
+    target = checkout.default_branch()
+    if branch == target:
+        return
+    if not checkout.fetch_origin():
+        warn("git fetch failed; checking merges against local refs")
+    if _merged_into(checkout, branch, target):
+        log(f"Deleting branch {branch} (merged into {target})")
+        if not checkout.git("branch", "-D", branch):
+            raise Die(f"couldn't delete branch {branch}")
+    else:
+        log(f"Keeping branch {branch}: not merged into {target}")
+
+
+def remove_worktree(checkout: Checkout, name: str, force: bool = False) -> None:
+    # As `wt ls` shows it, or as it was given to `wt new`: a worktree made or
+    # moved by hand needn't have a slug for a name.
+    worktree = checkout.worktree_named(name) or checkout.worktree_named(rules.slugify(name))
+    if worktree is None:
+        raise Die(f"no worktree is named {name} (devenv wt ls)")
+    path = Path(worktree.path)
     if path == checkout.main:
         raise Die("refusing to remove the main checkout")
-    db = rules.worktree_db(checkout.dir, rules.slugify(branch))
-    # A branch can share the template's name if it predates the template.
+    db = rules.worktree_db(checkout.dir, path.name)
+    # A worktree can have the template's name if it predates the template.
     has_db = db != rules.template_db(checkout.dir) and postgres.db_exists(db)
     # Names can collide across checkouts, so the name alone doesn't make it ours.
     env_db = rules.database_from_url(env_file_get(path / ".env", "DATABASE_URL"))
@@ -193,25 +212,19 @@ def remove_worktree(checkout: Checkout, branch: str, force: bool = False) -> Non
             f"If nothing else does, drop it with: dropdb {db}"
         )
 
-    target = checkout.default_branch()
-    if not checkout.fetch_origin():
-        warn("git fetch failed; checking merges against local refs")
-    if _merged_into(checkout, branch, target):
-        log(f"Deleting branch {branch} (merged into {target})")
-        if not checkout.git("branch", "-D", branch):
-            raise Die(f"couldn't delete branch {branch}")
-    else:
-        log(f"Keeping branch {branch}: not merged into {target}")
+    if worktree.branch:
+        _delete_branch_if_merged(checkout, worktree.branch)
 
     if was_inside:
         print(f"\nYour shell is still in the removed worktree. Leave it with: cd {checkout.main}")
 
 
 def list_worktrees(checkout: Checkout) -> None:
-    row = "{:<32} {:<6} {:<32} {}"
-    print(row.format("BRANCH", "PORT", "DATABASE", "PATH"))
+    row = "{:<24} {:<32} {:<6} {:<32} {}"
+    print(row.format("NAME", "BRANCH", "PORT", "DATABASE", "PATH"))
     for worktree in checkout.worktrees():
         env = Path(worktree.path) / ".env"
         db = rules.database_from_url(env_file_get(env, "DATABASE_URL"))
         branch = worktree.branch or "(detached)"
-        print(row.format(branch, env_file_get(env, "PORT"), db, worktree.path))
+        name = Path(worktree.path).name
+        print(row.format(name, branch, env_file_get(env, "PORT"), db, worktree.path))

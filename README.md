@@ -13,8 +13,8 @@ From a checkout, use `uv tool install .`.
 ## Commands
 
 ```
-devenv wt new <branch> [--base <branch>]
-devenv wt rm <branch> [--force]
+devenv wt new <name> [--branch <branch>] [--base <branch>]
+devenv wt rm <name> [--force]
 devenv wt ls
 devenv setup [<path>]
 devenv repo add <clone-url> [--dir <dir>|<group>/<dir>] [--db] [--no-setup] [--check]
@@ -23,11 +23,12 @@ devenv repo add <clone-url> [--dir <dir>|<group>/<dir>] [--db] [--no-setup] [--c
 Every command has `--help`. The exit status is 0 on success, 1 on errors and 2
 for usage errors.
 
-**`devenv wt new`** works from the main checkout or any of its worktrees. It
-checks out the branch if it exists locally or on origin, or creates it from
-`--base`, which defaults to origin's default branch. The worktree gets:
+**`devenv wt new`** works from the main checkout or any of its worktrees. Its
+branch is `<name>` unless you pass `--branch`. It checks that branch out if it
+exists locally or on origin, or creates it from `--base`, which defaults to
+origin's default branch. The worktree gets:
 
-- a directory, `<checkout>-wt/<branch-slug>`;
+- a directory next to the main checkout, called `<name>` as a slug;
 - a `.env` copied from the main checkout, with its own `PORT`;
 - if `<dir>_dev` exists, its own copy of that database, with `DATABASE_URL`
   set;
@@ -42,7 +43,15 @@ the worktree's `.env` names that database. It refuses if there are uncommitted c
 pass `--force`. The branch is deleted only if it's merged into the default
 branch.
 
-**`devenv wt ls`** shows each worktree's branch, port, database and path.
+**`devenv wt ls`** shows each worktree's name, branch, port, database and path.
+
+A worktree keeps its name, port and database when it changes branch, which is
+plain `git switch`. `wt rm` takes that name, and considers deleting only the
+branch the worktree is on at that point.
+
+Worktree names share the folder with whatever else is in it, including other
+repos' worktrees, so `wt new` refuses a name that's already there. Add a prefix
+to the name if that happens.
 
 **`devenv setup`** runs `mise trust` and `mise install` if the checkout has a
 mise file, then one dependency install chosen by lockfile (pnpm, npm or yarn),
@@ -70,13 +79,14 @@ Postgres and these rules are the only state, so checkouts can be moved and
 repaired with ordinary tools.
 
 - Checkouts are at `~/<dir>` or `~/<group>/<dir>`, one folder level at most.
-- Worktrees are in `<checkout>-wt/<branch-slug>`.
+- A worktree is next to its main checkout, at `<parent>/<name>`. Its name is its
+  directory's name, so nothing else records it.
 - A checkout's directory name must be unique on the machine, whatever its
   folder, because databases are named after it.
 - The template database is `<dir>_dev`, and each worktree's is
-  `<dir>_<branch-slug>`. Both are lowercased, with any character outside
-  `[a-z0-9_]` turned into `_`, and cut to 63 characters. A branch that would
-  take the template's name, such as `dev`, is refused.
+  `<dir>_<name>`. Both are lowercased, with any character outside
+  `[a-z0-9_]` turned into `_`, and cut to 63 characters. A worktree name that
+  would take the template's, such as `dev`, is refused.
 - `DATABASE_URL=postgres://localhost/<db>` has no user, so the client connects
   as the OS user.
 - A new worktree's `PORT` is the lowest from 3001 that nothing listens on and

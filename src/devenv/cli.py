@@ -18,19 +18,20 @@ Postgres and its naming rules say it all.
 WT_DESCRIPTION = """\
 Create, remove or list worktrees of the repo you're in: run it from the main
 checkout or any of its worktrees. Each worktree lives next to the main
-checkout, in <checkout>-wt/<branch-slug>, with its own dev server PORT in its
+checkout in a directory of its own name, with its own dev server PORT in its
 .env. If a <dir>_dev database exists, each worktree also gets a copy of it, with
 DATABASE_URL in its .env. Databases are named after the checkout's directory,
-so give each repo on the machine a different one.
+so give each repo on the machine a different one. A worktree keeps its name,
+port and database when it changes branch, which is plain git switch.
 """
 
 
 def _wt_new(args: argparse.Namespace) -> None:
-    new_worktree(current_checkout(), args.branch, args.base)
+    new_worktree(current_checkout(), args.name, branch=args.branch, base=args.base)
 
 
 def _wt_rm(args: argparse.Namespace) -> None:
-    remove_worktree(current_checkout(), args.branch, args.force)
+    remove_worktree(current_checkout(), args.name, args.force)
 
 
 def _wt_ls(args: argparse.Namespace) -> None:
@@ -66,14 +67,20 @@ def _parser() -> argparse.ArgumentParser:
     new = wt_commands.add_parser(
         "new",
         help="create a worktree with its own port and database",
-        description="Create a worktree for <branch>, with its own port and, "
+        description="Create a worktree called <name>, with its own port and, "
         "if there's a <dir>_dev database, its own copy of it.",
     )
     new.add_argument(
-        "branch",
+        "name",
+        metavar="<name>",
+        help="the worktree's name: slugified, it's the directory, next to the main "
+        "checkout, and the end of its database name",
+    )
+    new.add_argument(
+        "--branch",
         metavar="<branch>",
         help="branch to work on: checked out if it exists locally or on origin, "
-        "otherwise created from --base",
+        "otherwise created from --base (default: <name>)",
     )
     new.add_argument(
         "--base",
@@ -85,10 +92,10 @@ def _parser() -> argparse.ArgumentParser:
     rm = wt_commands.add_parser(
         "rm",
         help="remove a worktree and its database",
-        description="Remove the branch's worktree and drop its database, if it has one. "
-        "The branch is deleted too if it's merged into the default branch.",
+        description="Remove a worktree and drop its database, if it has one. "
+        "Its current branch is deleted too if it's merged into the default branch.",
     )
-    rm.add_argument("branch", metavar="<branch>", help="branch whose worktree to remove")
+    rm.add_argument("name", metavar="<name>", help="the worktree's name, as devenv wt ls shows it")
     rm.add_argument(
         "--force",
         action="store_true",

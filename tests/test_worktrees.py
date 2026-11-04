@@ -15,7 +15,7 @@ def env_of(path):
 def test_new_branch_from_default(machine):
     app = machine.repo(origin=True)
     result = machine.ok("wt", "new", "feat/x", cwd=app)
-    path = machine.home / "app-wt" / "feat-x"
+    path = machine.home / "feat-x"
     assert (path / "README").exists()
     assert "PORT=3001\n" in env_of(path)
     assert git_out(path, "branch", "--show-current") == "feat/x"
@@ -31,7 +31,7 @@ def test_new_from_local_branch(machine):
     app = machine.repo()
     git(app, "branch", "topic")
     machine.ok("wt", "new", "topic", cwd=app)
-    assert git_out(machine.home / "app-wt/topic", "branch", "--show-current") == "topic"
+    assert git_out(machine.home / "topic", "branch", "--show-current") == "topic"
 
 
 def test_new_from_origin_only_branch(machine):
@@ -44,7 +44,7 @@ def test_new_from_origin_only_branch(machine):
     git(seed, "push", "-q", "origin", "remote-only")
 
     machine.ok("wt", "new", "remote-only", cwd=app)
-    path = machine.home / "app-wt/remote-only"
+    path = machine.home / "remote-only"
     assert (path / "extra").exists()
     upstream = git_out(path, "for-each-ref", "--format=%(upstream:short)", "refs/heads/remote-only")
     assert upstream == "origin/remote-only"
@@ -69,7 +69,7 @@ def test_base_selects_the_start(machine):
     git(app, "checkout", "-q", "main")
 
     machine.ok("wt", "new", "feat", "--base", "develop", cwd=app)
-    assert (machine.home / "app-wt/feat/dev-only").exists()
+    assert (machine.home / "feat/dev-only").exists()
 
 
 def test_base_ignored_for_existing_branch(machine):
@@ -84,25 +84,25 @@ def test_missing_base(machine):
     result = machine.run("wt", "new", "x", "--base", "nope", cwd=app)
     assert result.returncode == 1
     assert result.stderr.endswith("devenv: base branch nope not found locally or on origin\n")
-    assert not (machine.home / "app-wt/x").exists()
+    assert not (machine.home / "x").exists()
 
 
 def test_new_from_inside_a_worktree(machine):
     app = machine.repo()
     machine.ok("wt", "new", "one", cwd=app)
-    subdir = machine.home / "app-wt/one/sub"
+    subdir = machine.home / "one/sub"
     subdir.mkdir()
     machine.ok("wt", "new", "two", cwd=subdir)
-    path = machine.home / "app-wt/two"
+    path = machine.home / "two"
     assert "PORT=3002\n" in env_of(path)
 
 
 def test_nested_checkout(machine):
     app = machine.repo("group/repo")
     machine.ok("wt", "new", "feat/x", cwd=app)
-    path = machine.home / "group/repo-wt/feat-x"
+    path = machine.home / "group/feat-x"
     assert (path / "README").exists()
-    assert not (machine.home / "repo-wt").exists()
+    assert not (machine.home / "feat-x").exists()
 
 
 def test_port_skips_one_claimed_by_another_checkout(machine):
@@ -110,28 +110,28 @@ def test_port_skips_one_claimed_by_another_checkout(machine):
     nested = machine.repo("group/second")
     machine.ok("wt", "new", "a", cwd=first)
     machine.ok("wt", "new", "b", cwd=nested)
-    assert "PORT=3002\n" in env_of(machine.home / "group/second-wt/b")
+    assert "PORT=3002\n" in env_of(machine.home / "group/b")
 
 
 def test_port_claimed_by_main_checkout_env(machine):
     app = machine.repo()
     (app / ".env").write_text("export PORT='3001'\n")
     machine.ok("wt", "new", "a", cwd=app)
-    assert "PORT=3002\n" in env_of(machine.home / "app-wt/a")
+    assert "PORT=3002\n" in env_of(machine.home / "a")
 
 
 def test_port_skips_listening_socket(machine):
     (machine.bin / "ss-output").write_text("LISTEN 0 511 *:3001 *:*\n")
     app = machine.repo()
     machine.ok("wt", "new", "a", cwd=app)
-    assert "PORT=3002\n" in env_of(machine.home / "app-wt/a")
+    assert "PORT=3002\n" in env_of(machine.home / "a")
 
 
 def test_env_is_copied_and_overridden(machine):
     app = machine.repo()
     (app / ".env").write_text("SECRET=keep\nPORT=9\nDATABASE_URL=postgres://elsewhere/shared\n")
     result = machine.ok("wt", "new", "a", cwd=app)
-    env = env_of(machine.home / "app-wt/a")
+    env = env_of(machine.home / "a")
     assert "SECRET=keep\n" in env
     assert "DATABASE_URL=postgres://elsewhere/shared\n" in env
     assert f"uses DATABASE_URL copied from {app}/.env" in result.stdout
@@ -148,7 +148,7 @@ def test_tailnet_summary(machine):
     machine.stub("tailscale", f"echo '{status}'")
     app = machine.repo()
     result = machine.ok("wt", "new", "a", cwd=app)
-    path = machine.home / "app-wt/a"
+    path = machine.home / "a"
     assert "http://box:3001\n" in result.stdout
     assert "Open it:" in result.stdout
     assert re.search(rf"cursor --remote ssh-remote\+\S+@box {path}\n", result.stdout)
@@ -157,10 +157,10 @@ def test_tailnet_summary(machine):
 
 def test_refuses_existing_path(machine):
     app = machine.repo()
-    (machine.home / "app-wt/a").mkdir(parents=True)
+    (machine.home / "a").mkdir(parents=True)
     result = machine.run("wt", "new", "a", cwd=app)
     assert result.returncode == 1
-    assert "already exists (devenv wt ls shows worktrees)" in result.stderr
+    assert "already exists. Pick another name." in result.stderr
 
 
 def test_refuses_branch_checked_out_elsewhere(machine):
@@ -183,12 +183,15 @@ def test_dies_when_postgres_cant_be_queried(machine):
     result = machine.run("wt", "new", "a", cwd=app)
     assert result.returncode == 1
     assert "can't query Postgres; is it running?" in result.stderr
-    assert not (machine.home / "app-wt/a").exists()
+    assert not (machine.home / "a").exists()
 
 
 def test_filesystem_errors_are_reported_without_a_traceback(machine):
     app = machine.repo()
-    (machine.home / "app-wt").write_text("in the way\n")
+    (app / ".env").mkdir()
+    (app / ".env/x").touch()
+    git(app, "add", ".")
+    git(app, "commit", "-qm", "a directory where the worktree's .env goes")
     result = machine.run("wt", "new", "a", cwd=app)
     assert result.returncode == 1
     assert "devenv: " in result.stderr
@@ -212,7 +215,7 @@ def test_refuses_bare_repo(machine):
 def test_rm_refuses_dirty_worktree(machine):
     app = machine.repo()
     machine.ok("wt", "new", "a", cwd=app)
-    path = machine.home / "app-wt/a"
+    path = machine.home / "a"
     (path / "new-file").write_text("x\n")
 
     result = machine.run("wt", "rm", "a", cwd=app)
@@ -228,13 +231,13 @@ def test_rm_ignores_untracked_env(machine):
     app = machine.repo()
     machine.ok("wt", "new", "a", cwd=app)
     machine.ok("wt", "rm", "a", cwd=app)
-    assert not (machine.home / "app-wt/a").exists()
+    assert not (machine.home / "a").exists()
 
 
 def test_rm_keeps_unmerged_branch(machine):
     app = machine.repo()
     machine.ok("wt", "new", "a", cwd=app)
-    path = machine.home / "app-wt/a"
+    path = machine.home / "a"
     (path / "work").write_text("x\n")
     git(path, "add", "work")
     git(path, "commit", "-qm", "work")
@@ -255,7 +258,7 @@ def test_rm_deletes_merged_branch(machine):
 def test_rm_deletes_branch_merged_on_origin(machine):
     app = machine.repo(origin=True)
     machine.ok("wt", "new", "a", cwd=app)
-    path = machine.home / "app-wt/a"
+    path = machine.home / "a"
     (path / "work").write_text("x\n")
     git(path, "add", "work")
     git(path, "commit", "-qm", "work")
@@ -268,7 +271,7 @@ def test_rm_deletes_branch_merged_on_origin(machine):
 def test_rm_from_inside_the_worktree(machine):
     app = machine.repo()
     machine.ok("wt", "new", "a", cwd=app)
-    path = machine.home / "app-wt/a"
+    path = machine.home / "a"
     result = machine.ok("wt", "rm", "a", cwd=path)
     assert not path.exists()
     assert f"Your shell is still in the removed worktree. Leave it with: cd {app}" in result.stdout
@@ -283,23 +286,119 @@ def test_rm_from_outside_says_nothing_about_the_shell(machine):
 def test_rm_of_a_worktree_whose_directory_is_gone(machine):
     app = machine.repo()
     machine.ok("wt", "new", "a", cwd=app)
-    shutil.rmtree(machine.home / "app-wt/a")
+    shutil.rmtree(machine.home / "a")
     machine.ok("wt", "rm", "a", cwd=app)
-    assert "app-wt" not in git_out(app, "worktree", "list")
+    assert git_out(app, "worktree", "list").count("\n") == 0
 
 
 def test_rm_refuses_main_checkout(machine):
     app = machine.repo()
-    result = machine.run("wt", "rm", "main", cwd=app)
+    result = machine.run("wt", "rm", "app", cwd=app)
     assert result.returncode == 1
     assert "devenv: refusing to remove the main checkout\n" in result.stderr
 
 
-def test_rm_unknown_branch(machine):
+def test_rm_unknown_name(machine):
     app = machine.repo()
     result = machine.run("wt", "rm", "nope", cwd=app)
     assert result.returncode == 1
-    assert "no worktree has branch nope checked out (devenv wt ls)" in result.stderr
+    assert "no worktree is named nope (devenv wt ls)" in result.stderr
+
+
+def test_name_sets_the_directory(machine):
+    app = machine.repo()
+    machine.ok("wt", "new", "Long Running", "--branch", "feat/x", cwd=app)
+    assert git_out(machine.home / "long-running", "branch", "--show-current") == "feat/x"
+
+
+def test_branch_defaults_to_the_name_as_typed(machine):
+    app = machine.repo()
+    machine.ok("wt", "new", "feat/x", cwd=app)
+    assert git_out(machine.home / "feat-x", "branch", "--show-current") == "feat/x"
+
+
+def test_name_that_cannot_be_a_branch_needs_one(machine):
+    app = machine.repo()
+    result = machine.run("wt", "new", "Long Running", cwd=app)
+    assert result.returncode == 1
+    assert "not a valid branch name: Long Running. Choose one with --branch." in result.stderr
+
+
+def test_group_worktrees_are_peers_of_the_checkout(machine):
+    app = machine.repo("group/app")
+    machine.ok("wt", "new", "a", cwd=app)
+    assert (machine.home / "group/a").is_dir()
+
+
+def test_refuses_a_name_taken_by_a_peer(machine):
+    app = machine.repo()
+    machine.repo("other")
+    result = machine.run("wt", "new", "other", "--branch", "a", cwd=app)
+    assert result.returncode == 1
+    assert "Pick another name" in result.stderr
+
+
+def test_refuses_the_main_checkout_as_a_name(machine):
+    app = machine.repo()
+    result = machine.run("wt", "new", "app", cwd=app)
+    assert result.returncode == 1
+    assert f"{app} already exists" in result.stderr
+
+
+def test_rm_takes_the_name_ls_shows_for_a_hand_made_worktree(machine):
+    app = machine.repo()
+    git(app, "worktree", "add", "-q", "-b", "a", str(machine.home / "My_WT"))
+    assert "My_WT" in machine.ok("wt", "ls", cwd=app).stdout
+    machine.ok("wt", "rm", "My_WT", cwd=app)
+    assert not (machine.home / "My_WT").exists()
+
+
+def test_a_name_nothing_can_slugify_is_refused(machine):
+    app = machine.repo()
+    result = machine.run("wt", "new", "!!!", cwd=app)
+    assert result.returncode == 1
+    assert "can't make a worktree name from '!!!'" in result.stderr
+
+
+def test_rm_slugifies_so_a_branch_finds_its_default_worktree(machine):
+    app = machine.repo()
+    machine.ok("wt", "new", "feat/x", cwd=app)
+    machine.ok("wt", "rm", "feat/x", cwd=app)
+    assert not (machine.home / "feat-x").exists()
+
+
+def test_rm_after_moving_between_branches(machine):
+    app = machine.repo()
+    machine.ok("wt", "new", "long", "--branch", "first", cwd=app)
+    path = machine.home / "long"
+    git(path, "switch", "-qc", "second")
+    (path / "work").write_text("x\n")
+    git(path, "add", ".")
+    git(path, "commit", "-qm", "work")
+
+    result = machine.ok("wt", "rm", "long", cwd=app)
+    assert not path.exists()
+    # Only the branch it was on at the end counts, and that one isn't merged.
+    assert "Keeping branch second" in result.stdout
+    assert git_out(app, "branch", "--list", "first", "second").split() == ["first", "second"]
+
+
+def test_rm_detached_worktree(machine):
+    app = machine.repo()
+    machine.ok("wt", "new", "long", "--branch", "a", cwd=app)
+    path = machine.home / "long"
+    git(path, "checkout", "-q", "--detach")
+    result = machine.ok("wt", "rm", "long", cwd=app)
+    assert not path.exists()
+    assert "branch" not in result.stdout.lower()
+
+
+def test_rm_never_deletes_the_default_branch(machine):
+    app = machine.repo()
+    git(app, "switch", "-qc", "elsewhere")
+    machine.ok("wt", "new", "long", "--branch", "main", cwd=app)
+    machine.ok("wt", "rm", "long", cwd=app)
+    assert git_out(app, "branch", "--list", "main") != ""
 
 
 def test_ls(machine):
@@ -307,15 +406,15 @@ def test_ls(machine):
     (app / ".env").write_text("PORT=3000\nDATABASE_URL=postgres://localhost/app_dev?x=1\n")
     machine.ok("wt", "new", "feat/x", cwd=app)
     machine.ok("wt", "new", "gone", cwd=app)
-    git(machine.home / "app-wt/gone", "checkout", "-q", "--detach")
+    git(machine.home / "gone", "checkout", "-q", "--detach")
 
     lines = machine.ok("wt", "ls", cwd=app).stdout.splitlines()
-    row = "{:<32} {:<6} {:<32} {}"
+    row = "{:<24} {:<32} {:<6} {:<32} {}"
     assert lines == [
-        row.format("BRANCH", "PORT", "DATABASE", "PATH"),
-        row.format("main", "3000", "app_dev", app),
-        row.format("feat/x", "3001", "app_dev", machine.home / "app-wt/feat-x"),
-        row.format("(detached)", "3002", "app_dev", machine.home / "app-wt/gone"),
+        row.format("NAME", "BRANCH", "PORT", "DATABASE", "PATH"),
+        row.format("app", "main", "3000", "app_dev", app),
+        row.format("feat-x", "feat/x", "3001", "app_dev", machine.home / "feat-x"),
+        row.format("gone", "(detached)", "3002", "app_dev", machine.home / "gone"),
     ]
 
 

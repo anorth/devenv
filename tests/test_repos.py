@@ -20,7 +20,7 @@ def test_clones_to_the_repo_name(machine):
     path = machine.home / "app"
     assert (path / "README").exists()
     assert f"Checkout ready: {path}" in result.stdout
-    assert f"cd {path} && devenv wt new <branch>" in result.stdout
+    assert f"cd {path} && devenv wt new <name>" in result.stdout
     for absent in ("Open it:", "DATABASE_URL", "Setup was skipped"):
         assert absent not in result.stdout
 
@@ -68,13 +68,6 @@ def test_check_refuses_a_group_that_is_a_repo(machine):
     result = machine.run("repo", "add", "https://github.com/o/x", "--dir", "app/x", "--check")
     assert result.returncode == 1
     assert f"{existing} is a repo" in result.stderr
-
-
-def test_check_refuses_a_group_that_holds_worktrees(machine):
-    existing = machine.repo("app")
-    result = machine.run("repo", "add", "https://github.com/o/x", "--dir", "app-wt/x", "--check")
-    assert result.returncode == 1
-    assert f"holds the worktrees of {existing}" in result.stderr
 
 
 def test_home_can_be_a_repo(machine):
@@ -228,7 +221,7 @@ def test_with_a_real_template(pg_machine):
         assert postgres.db_exists(db)
         checkout = machine.home / "group/devenv_repo_test"
         machine.ok("wt", "new", "feat", cwd=checkout)
-        assert "devenv_repo_test_feat" in (Path(f"{checkout}-wt/feat/.env").read_text())
+        assert "devenv_repo_test_feat" in ((checkout.parent / "feat/.env").read_text())
     finally:
         for name in (db, "devenv_repo_test_feat"):
             postgres.drop(name)

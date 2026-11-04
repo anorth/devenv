@@ -40,7 +40,7 @@ def test_new_and_rm_create_and_drop_the_database(pg_machine, repo):
     pg_machine.ok("wt", "new", "feat/x", cwd=app)
     db = f"{name}_feat_x"
     assert db in database_names()
-    env = (pg_machine.home / f"{name}-wt/feat-x/.env").read_text()
+    env = (pg_machine.home / "feat-x/.env").read_text()
     assert f"DATABASE_URL=postgres://localhost/{db}\n" in env
 
     pg_machine.ok("wt", "rm", "feat/x", cwd=app)
@@ -50,7 +50,7 @@ def test_new_and_rm_create_and_drop_the_database(pg_machine, repo):
 def test_rm_leaves_a_database_the_env_doesnt_name(pg_machine, repo):
     app, name, _ = repo
     pg_machine.ok("wt", "new", "a", cwd=app)
-    env = pg_machine.home / f"{name}-wt/a/.env"
+    env = pg_machine.home / "a/.env"
     env.write_text("DATABASE_URL=postgres://localhost/something_else\n")
 
     result = pg_machine.ok("wt", "rm", "a", cwd=app)
@@ -61,19 +61,37 @@ def test_rm_leaves_a_database_the_env_doesnt_name(pg_machine, repo):
 def test_locked_worktree_keeps_its_database(pg_machine, repo):
     app, name, _ = repo
     pg_machine.ok("wt", "new", "a", cwd=app)
-    git(app, "worktree", "lock", str(pg_machine.home / f"{name}-wt/a"))
+    git(app, "worktree", "lock", str(pg_machine.home / "a"))
     result = pg_machine.run("wt", "rm", "a", cwd=app)
     assert result.returncode == 1
     assert "git worktree remove failed" in result.stderr
     assert f"{name}_a" in database_names()
 
 
-def test_branch_named_after_the_template_is_refused(pg_machine, repo):
+def test_name_of_the_template_is_refused(pg_machine, repo):
     app, name, template = repo
     result = pg_machine.run("wt", "new", "dev", cwd=app)
     assert result.returncode == 1
     assert f"would use the name of the template database, {template}" in result.stderr
+    assert "--branch" in result.stderr
     assert template in database_names()
+
+
+def test_branch_named_after_the_template_can_take_another_name(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "other", "--branch", "dev", cwd=app)
+    assert f"{name}_other" in database_names()
+    pg_machine.ok("wt", "rm", "other", cwd=app)
+
+
+def test_database_stays_with_the_name_across_branches(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "long", "--branch", "first", cwd=app)
+    path = pg_machine.home / "long"
+    git(path, "switch", "-qc", "second")
+    assert f"DATABASE_URL=postgres://localhost/{name}_long\n" in (path / ".env").read_text()
+    pg_machine.ok("wt", "rm", "long", cwd=app)
+    assert f"{name}_long" not in database_names()
 
 
 def test_rm_never_drops_the_template(pg_machine):
@@ -95,7 +113,7 @@ def test_refuses_existing_database(pg_machine, repo):
     result = pg_machine.run("wt", "new", "a", cwd=app)
     assert result.returncode == 1
     assert f"database {name}_a already exists. If nothing uses it, drop it with: dropdb {name}_a" in result.stderr
-    assert not (pg_machine.home / f"{name}-wt/a").exists()
+    assert not (pg_machine.home / "a").exists()
 
 
 def hold_connection(db):
@@ -141,7 +159,7 @@ def test_copies_while_the_template_is_in_use(pg_machine, repo):
         holder.kill()
         holder.wait()
     assert f"{name}_a" in database_names()
-    assert (pg_machine.home / f"{name}-wt/a").exists()
+    assert (pg_machine.home / "a").exists()
 
 
 @pytest.mark.parametrize("tool", ["pg_dump", "pg_restore"])
@@ -152,7 +170,7 @@ def test_failed_copy_leaves_nothing_behind(pg_machine, repo, tool):
     assert result.returncode == 1
     assert f"can't copy {template}: pg_dump or pg_restore failed" in result.stderr
     assert f"{name}_a" not in database_names()
-    assert not (pg_machine.home / f"{name}-wt/a").exists()
+    assert not (pg_machine.home / "a").exists()
 
 
 def test_rm_refuses_database_with_connections_unless_forced(pg_machine, repo):
@@ -164,7 +182,7 @@ def test_rm_refuses_database_with_connections_unless_forced(pg_machine, repo):
         result = pg_machine.run("wt", "rm", "a", cwd=app)
         assert result.returncode == 1
         assert f"database {db} has 1 active connection(s)" in result.stderr
-        assert (pg_machine.home / f"{name}-wt/a").exists()
+        assert (pg_machine.home / "a").exists()
 
         pg_machine.ok("wt", "rm", "a", "--force", cwd=app)
     finally:

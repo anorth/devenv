@@ -20,9 +20,8 @@ class Checkout:
     def dir(self) -> str:
         return self.main.name
 
-    @property
-    def worktree_root(self) -> Path:
-        return self.main.with_name(f"{self.main.name}-wt")
+    def worktree_path(self, name: str) -> Path:
+        return self.main.parent / name
 
     def git(self, *args: str) -> bool:
         """Run git with its output on the terminal; say whether it succeeded."""
@@ -43,6 +42,13 @@ class Checkout:
 
     def worktrees(self) -> list[rules.Worktree]:
         return rules.parse_worktree_list(self.git_output("worktree", "list", "--porcelain").stdout)
+
+    def worktree_named(self, name: str) -> rules.Worktree | None:
+        """A worktree by name, which is its directory's: nothing else records it."""
+        for worktree in self.worktrees():
+            if Path(worktree.path).name == name:
+                return worktree
+        return None
 
     def worktree_for_branch(self, branch: str) -> Path | None:
         for worktree in self.worktrees():
