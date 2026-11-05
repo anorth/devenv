@@ -138,6 +138,12 @@ the dev user, plus git, gh, jq, curl, mise, uv and Python 3.12 or later.
 ## Developing
 
 ```
+uv run python -m devenv --help
+```
+
+Run code in the working tree.
+
+```
 uv run pytest
 ```
 

@@ -10,20 +10,18 @@ from devenv.ui import guarded, log
 from devenv.worktrees import list_worktrees, new_worktree, remove_worktree
 
 DESCRIPTION = """\
-Manage checkouts, worktrees and the user-level environment of a dev VM.
-It keeps no state of its own: git's worktree list, each worktree's env files,
-Postgres and its naming rules say it all.
+Manage checkouts, worktrees and the user-level environment of a dev machine.
+It keeps no state of its own: git's worktree list, the env files, Postgres and
+its naming rules say it all.
 """
 
 WT_DESCRIPTION = """\
-Create, remove or list worktrees of the repo you're in: run it from the main
-checkout or any of its worktrees. Each worktree lives next to the main
-checkout in a directory of its own name, with its own dev server PORT in its
-.env.local and its .env linked to the main checkout's. If a <dir>_dev database
-exists, each worktree also gets a copy of it, with DATABASE_URL in its .env.local.
-Databases are named after the checkout's directory, so give each repo on the
-machine a different one. A worktree keeps its name, port and database when it
-changes branch, which is plain git switch.
+Manage the worktrees of the repo you're in, from its main checkout or any
+worktree. A worktree sits next to the main checkout, and keeps its name, port
+and database when it changes branch, which is plain git switch.
+
+Its .env links to the main checkout's, and its own .env.local holds its PORT. If
+a <dir>_dev database exists, it gets its own copy, with the settings in .env.local.
 """
 
 
@@ -74,8 +72,8 @@ def _parser() -> argparse.ArgumentParser:
     new.add_argument(
         "name",
         metavar="<name>",
-        help="the worktree's name: slugified, it's the directory, next to the main "
-        "checkout, and the end of its database name",
+        help="the worktree's name, slugified, which is its directory and the end of "
+        "its database's name",
     )
     new.add_argument(
         "--branch",
@@ -106,8 +104,8 @@ def _parser() -> argparse.ArgumentParser:
 
     ls = wt_commands.add_parser(
         "ls",
-        help="show worktrees with their port and database",
-        description="Show the repo's worktrees with their port and database.",
+        help="show worktrees with their branch, port and database",
+        description="Show the repo's worktrees with their branch, port and database.",
     )
     ls.set_defaults(run=_wt_ls)
 
@@ -149,7 +147,8 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument(
         "--db",
         action="store_true",
-        help="create a <dir>_dev database, which devenv wt new then copies for each worktree",
+        help="create a <dir>_dev database, which devenv wt new then copies for each "
+        "worktree, and write its settings to .env.local",
     )
     add.add_argument(
         "--no-setup",
