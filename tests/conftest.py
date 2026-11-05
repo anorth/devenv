@@ -76,7 +76,7 @@ class Machine:
         (path / "README").write_text("hello\n")
         for name, content in (files or {}).items():
             (path / name).write_text(content)
-        subprocess.run(["git", "-C", str(path), "add", "."], check=True, env=self.env)
+        subprocess.run(["git", "-C", str(path), "add", "-f", "."], check=True, env=self.env)
         subprocess.run(["git", "-C", str(path), "commit", "-qm", "first"], check=True, env=self.env)
 
 
@@ -89,7 +89,9 @@ def _machine(tmp_path, monkeypatch):
     bin_dir.mkdir()
     (home / ".gitconfig").write_text(
         "[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n"
+        "[core]\n\texcludesFile = ~/.gitignore_global\n"
     )
+    (home / ".gitignore_global").write_text(".env\n.env.local\n")
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",

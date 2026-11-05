@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +10,7 @@ from conftest import git, git_out
 
 
 def env_of(path):
-    return (path / ".env").read_text()
+    return (path / ".env.local").read_text()
 
 
 def test_new_branch_from_default(machine):
@@ -127,20 +128,85 @@ def test_port_skips_listening_socket(machine):
     assert "PORT=3002\n" in env_of(machine.home / "a")
 
 
-def test_env_is_copied_and_overridden(machine):
-    app = machine.repo()
+def test_env_is_linked_and_local_env_is_the_worktrees_own(machine):
+    app = machine.repo("group/app")
     (app / ".env").write_text("SECRET=keep\nPORT=9\nDATABASE_URL=postgres://elsewhere/shared\n")
     result = machine.ok("wt", "new", "a", cwd=app)
-    env = env_of(machine.home / "a")
-    assert "SECRET=keep\n" in env
-    assert "DATABASE_URL=postgres://elsewhere/shared\n" in env
-    assert f"uses DATABASE_URL copied from {app}/.env" in result.stdout
+    path = machine.home / "group/a"
+    assert (path / ".env").readlink() == Path("../app/.env")
+    assert env_of(path) == "PORT=3001\n"
+    assert "uses DATABASE_URL from its .env" in result.stdout
+
+
+def test_a_changed_secret_reaches_every_worktree(machine):
+    app = machine.repo()
+    (app / ".env").write_text("SECRET=old\n")
+    machine.ok("wt", "new", "a", cwd=app)
+    (app / ".env").write_text("SECRET=new\n")
+    assert (machine.home / "a/.env").read_text() == "SECRET=new\n"
+
+
+def test_rm_leaves_the_main_env_alone(machine):
+    app = machine.repo()
+    (app / ".env").write_text("SECRET=keep\n")
+    machine.ok("wt", "new", "a", cwd=app)
+    machine.ok("wt", "rm", "a", cwd=app)
+    assert (app / ".env").read_text() == "SECRET=keep\n"
 
 
 def test_missing_main_env_warns(machine):
     app = machine.repo()
     result = machine.ok("wt", "new", "a", cwd=app)
     assert f"!!! {app}/.env doesn't exist" in result.stderr
+    assert not (machine.home / "a/.env").is_symlink()
+    assert env_of(machine.home / "a") == "PORT=3001\n"
+
+
+def test_tracked_env_is_left_alone(machine):
+    app = machine.repo()
+    git(app, "config", "core.excludesFile", "/dev/null")
+    (app / ".env").write_text("DEFAULT=1\n")
+    git(app, "add", ".")
+    git(app, "commit", "-qm", "env")
+    result = machine.ok("wt", "new", "a", cwd=app)
+    path = machine.home / "a"
+    assert not (path / ".env").is_symlink()
+    assert (path / ".env").read_text() == "DEFAULT=1\n"
+    assert "the repo has its own .env" in result.stderr
+    assert "!!! .env isn't gitignored" not in result.stderr
+
+
+def test_warns_when_env_files_are_not_ignored(machine):
+    app = machine.repo()
+    git(app, "config", "core.excludesFile", "/dev/null")
+    (app / ".env").touch()
+    result = machine.ok("wt", "new", "a", cwd=app)
+    assert "!!! .env isn't gitignored" in result.stderr
+    assert "!!! .env.local isn't gitignored" in result.stderr
+    # Not ignored, but still not changes that block removing it.
+    machine.ok("wt", "rm", "a", cwd=app)
+
+
+def test_values_resolve_as_the_dev_server_would(machine):
+    app = machine.repo()
+    (app / ".env").write_text("PORT=3001\nDATABASE_URL=postgres://localhost/shared\n")
+    (app / ".env.local").write_text("PORT=3002\n")
+    row = machine.ok("wt", "ls", cwd=app).stdout.splitlines()[1]
+    assert "3002" in row and "shared" in row
+    # The main checkout's port is 3002: its shared 3001 is overridden, so it's free.
+    machine.ok("wt", "new", "a", cwd=app)
+    machine.ok("wt", "new", "b", cwd=app)
+    assert env_of(machine.home / "a") == "PORT=3001\n"
+    assert env_of(machine.home / "b") == "PORT=3003\n"
+
+
+def test_worktree_from_before_the_split_keeps_its_values(machine):
+    app = machine.repo()
+    machine.ok("wt", "new", "a", cwd=app)
+    path = machine.home / "a"
+    (path / ".env.local").unlink()
+    (path / ".env").write_text("PORT=3005\n")
+    assert "3005" in machine.ok("wt", "ls", cwd=app).stdout
 
 
 def test_tailnet_summary(machine):
@@ -188,10 +254,10 @@ def test_dies_when_postgres_cant_be_queried(machine):
 
 def test_filesystem_errors_are_reported_without_a_traceback(machine):
     app = machine.repo()
-    (app / ".env").mkdir()
-    (app / ".env/x").touch()
-    git(app, "add", ".")
-    git(app, "commit", "-qm", "a directory where the worktree's .env goes")
+    (app / ".env.local").mkdir()
+    (app / ".env.local/x").touch()
+    git(app, "add", "-f", ".")
+    git(app, "commit", "-qm", "a directory where the worktree's .env.local goes")
     result = machine.run("wt", "new", "a", cwd=app)
     assert result.returncode == 1
     assert "devenv: " in result.stderr

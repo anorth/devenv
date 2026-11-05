@@ -44,6 +44,21 @@ def database_url(db: str) -> str:
     return f"postgres://localhost/{db}"
 
 
+def database_env(db: str, user: str) -> dict[str, str]:
+    """The settings for a local database, for projects that want them broken out.
+
+    The user is the OS user's role, which localhost TCP trusts without a password.
+    """
+    return {
+        "DATABASE_URL": database_url(db),
+        "DB_HOST": "localhost",
+        "DB_PORT": "5432",
+        "DB_USER": user,
+        "DB_PASSWORD": "",
+        "DB_DATABASE": db,
+    }
+
+
 def database_from_url(url: str) -> str:
     return url.rsplit("/", 1)[-1].split("?", 1)[0]
 

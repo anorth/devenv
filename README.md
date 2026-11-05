@@ -29,9 +29,10 @@ exists locally or on origin, or creates it from `--base`, which defaults to
 origin's default branch. The worktree gets:
 
 - a directory next to the main checkout, called `<name>` as a slug;
-- a `.env` copied from the main checkout, with its own `PORT`;
-- if `<dir>_dev` exists, its own copy of that database, with `DATABASE_URL`
-  set;
+- a `.env` linked to the main checkout's, and a `.env.local` of its own with
+  its `PORT`;
+- if `<dir>_dev` exists, its own copy of that database, with `DATABASE_URL` in
+  `.env.local`;
 - its tools and dependencies, as `devenv setup` installs them.
 
 The database is copied with `pg_dump` and `pg_restore`, so the main checkout's
@@ -39,9 +40,9 @@ dev server can keep running. A schema change to the template waits until the
 copy finishes, and settings made with `ALTER DATABASE` aren't copied.
 
 **`devenv wt rm`** removes the worktree, then drops its database, as long as
-the worktree's `.env` names that database. It refuses if there are uncommitted changes or the database is in use, unless you
-pass `--force`. The branch is deleted only if it's merged into the default
-branch.
+the worktree's env files name that database. It refuses if there are uncommitted
+changes or the database is in use, unless you pass `--force`. The branch is
+deleted only if it's merged into the default branch.
 
 **`devenv wt ls`** shows each worktree's name, branch, port, database and path.
 
@@ -64,13 +65,48 @@ deploy keys take a moment to work. It refuses a path that already exists, a grou
 that's a file, a repo or a checkout's worktree folder, and a name whose
 databases would clash with those of any existing checkout.
 
-- `--db` creates the `<dir>_dev` template database. If that fails it warns.
+- `--db` creates the `<dir>_dev` template database, warning if that fails, and
+  writes its settings to `.env.local`. If that file exists, it warns and shows
+  them for you to add.
 - `.env.example` is copied to `.env` if there's no `.env`.
 - `devenv setup` then `./setup.sh` run unless you pass `--no-setup`. A step that
   fails warns, and the rest still run.
 - `--check` makes only the refusal checks and exits 0 or 1, without cloning.
 
 The clone URL decides the access: HTTPS for a token, SSH for a deploy key.
+
+## Env files
+
+Each checkout or worktree has two files, both gitignored:
+
+- `.env` holds secrets and flags. It's real in the main checkout and a link to it
+  in each worktree, so a rotated key reaches them all at once. Restart their dev
+  servers to pick it up.
+- `.env.local` holds what's particular to one checkout or worktree, and overrides
+  `.env`. `wt new` writes `PORT` and the database settings there: `DATABASE_URL`, and
+  `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` and `DB_DATABASE` for projects
+  that want them separately.
+
+`wt new` warns if either file isn't gitignored, and doesn't edit `.gitignore`.
+
+Next loads both files but doesn't take `PORT` from them, so the dev script has to,
+and then it works for anything that runs it, agents included:
+
+```json
+"dev": "dotenv -e .env.local -- next dev"
+```
+
+with `dotenv-cli` as a dev dependency. direnv wouldn't reach agents, because its
+hook needs an interactive prompt, and `node --env-file-if-exists` fails because
+Next hands it to `NODE_OPTIONS`, where Node refuses it.
+
+To move a project that keeps everything in `.env.local`:
+
+1. Add `.env` to `.gitignore`, and check that `git ls-files .env` prints nothing.
+2. Rename `.env.local` to `.env`.
+3. Make a new `.env.local` with the main checkout's `PORT` and database settings,
+   as `repo add --db` writes them.
+4. Change the dev script as above.
 
 ## The layout contract
 
@@ -87,10 +123,13 @@ repaired with ordinary tools.
   `<dir>_<name>`. Both are lowercased, with any character outside
   `[a-z0-9_]` turned into `_`, and cut to 63 characters. A worktree name that
   would take the template's, such as `dev`, is refused.
+- `.env` is shared with the main checkout, and `.env.local` is a worktree's own.
 - `DATABASE_URL=postgres://localhost/<db>` has no user, so the client connects
-  as the OS user.
-- A new worktree's `PORT` is the lowest from 3001 that nothing listens on and
-  that no worktree of any checkout on the machine claims.
+  as the OS user. `DB_USER` is that user, on `localhost:5432`, with an empty
+  `DB_PASSWORD`.
+- A worktree's `PORT` is in its `.env.local`, and a new one's is the lowest from
+  3001 that nothing listens on and that no worktree of any checkout on the machine
+  claims.
 
 The machine needs Postgres running locally, with a superuser role named after
 the dev user, plus git, gh, jq, curl, mise, uv and Python 3.12 or later.

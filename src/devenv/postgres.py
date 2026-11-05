@@ -1,7 +1,9 @@
 """The local Postgres. Names reach SQL only as psql variables."""
 
+import getpass
 import subprocess
 
+from devenv import rules
 from devenv.system import call, capture
 from devenv.ui import Die, warn
 
@@ -55,6 +57,10 @@ def copy_database(source: str, target: str) -> None:
             warn(f"couldn't drop {target}; drop it with: dropdb {target}")
     if not copied:
         raise Die(f"can't copy {source}: pg_dump or pg_restore failed")
+
+
+def connection_env(name: str) -> dict[str, str]:
+    return rules.database_env(name, getpass.getuser())
 
 
 def create(name: str) -> bool:

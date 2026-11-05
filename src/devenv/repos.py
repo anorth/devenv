@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 from devenv import postgres, rules
+from devenv.envfile import LOCAL_ENV, env_file_set, warn_if_env_not_ignored
 from devenv.git import find_checkouts
 from devenv.setup import setup_checkout, try_step
 from devenv.system import call, tailnet_name
@@ -69,6 +70,19 @@ def _copy_env_example(path: Path) -> None:
         warn(f"can't copy .env.example to .env: {err} (continuing)")
 
 
+def _write_database_env(path: Path, db: str) -> None:
+    settings = postgres.connection_env(db)
+    env = path / LOCAL_ENV
+    if os.path.lexists(env):
+        lines = "\n".join(f"  {key}={value}" for key, value in settings.items())
+        warn(f"{env} already exists, so add the database settings to it yourself:\n{lines}")
+        return
+    log(f"Writing the database settings to {LOCAL_ENV}")
+    for key, value in settings.items():
+        env_file_set(env, key, value)
+    warn_if_env_not_ignored(path)
+
+
 def _run_setup_script(path: Path) -> None:
     script = path / "setup.sh"
     if script.is_file():
@@ -81,7 +95,7 @@ def _print_summary(path: Path, db: str | None, ran_setup: bool) -> None:
     if host:
         print_open_commands(host, path)
     if db:
-        print(f"\nDatabase for {path}/.env:\n  DATABASE_URL={rules.database_url(db)}")
+        print(f"\nDatabase: {db}")
     if not ran_setup:
         print(f"\nSetup was skipped. To finish it: devenv setup {path}, then ./setup.sh if it has one.")
     print(f"\nWorktrees: cd {path} && devenv wt new <name>")
@@ -99,6 +113,8 @@ def add_repo(clone_url: str, path: Path, *, create_db: bool, run_setup: bool) ->
 
     log(f"Setting up {path}")
     _copy_env_example(path)
+    if db:
+        _write_database_env(path, db)
     if run_setup:
         setup_checkout(path)
         _run_setup_script(path)

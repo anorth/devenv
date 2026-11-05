@@ -163,3 +163,14 @@ def test_valid_checkout_dir(path):
 )
 def test_invalid_checkout_dir(path):
     assert not rules.valid_checkout_dir(path)
+
+
+def test_database_env():
+    assert rules.database_env("app_a", "vmuser") == {
+        "DATABASE_URL": "postgres://localhost/app_a",
+        "DB_HOST": "localhost",
+        "DB_PORT": "5432",
+        "DB_USER": "vmuser",
+        "DB_PASSWORD": "",
+        "DB_DATABASE": "app_a",
+    }

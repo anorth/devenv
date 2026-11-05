@@ -40,7 +40,10 @@ def test_new_and_rm_create_and_drop_the_database(pg_machine, repo):
     pg_machine.ok("wt", "new", "feat/x", cwd=app)
     db = f"{name}_feat_x"
     assert db in database_names()
-    env = (pg_machine.home / "feat-x/.env").read_text()
+    env = (pg_machine.home / "feat-x/.env.local").read_text()
+    assert f"DB_DATABASE={name}_feat_x\n" in env
+    assert "DB_HOST=localhost\nDB_PORT=5432\n" in env
+    assert "DB_PASSWORD=\n" in env
     assert f"DATABASE_URL=postgres://localhost/{db}\n" in env
 
     pg_machine.ok("wt", "rm", "feat/x", cwd=app)
@@ -50,11 +53,11 @@ def test_new_and_rm_create_and_drop_the_database(pg_machine, repo):
 def test_rm_leaves_a_database_the_env_doesnt_name(pg_machine, repo):
     app, name, _ = repo
     pg_machine.ok("wt", "new", "a", cwd=app)
-    env = pg_machine.home / "a/.env"
+    env = pg_machine.home / "a/.env.local"
     env.write_text("DATABASE_URL=postgres://localhost/something_else\n")
 
     result = pg_machine.ok("wt", "rm", "a", cwd=app)
-    assert f"!!! leaving database {name}_a: this worktree's .env doesn't use it." in result.stderr
+    assert f"!!! leaving database {name}_a: this worktree's env files don't use it." in result.stderr
     assert f"{name}_a" in database_names()
 
 
@@ -89,7 +92,7 @@ def test_database_stays_with_the_name_across_branches(pg_machine, repo):
     pg_machine.ok("wt", "new", "long", "--branch", "first", cwd=app)
     path = pg_machine.home / "long"
     git(path, "switch", "-qc", "second")
-    assert f"DATABASE_URL=postgres://localhost/{name}_long\n" in (path / ".env").read_text()
+    assert f"DATABASE_URL=postgres://localhost/{name}_long\n" in (path / ".env.local").read_text()
     pg_machine.ok("wt", "rm", "long", cwd=app)
     assert f"{name}_long" not in database_names()
 

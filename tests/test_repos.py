@@ -171,7 +171,32 @@ def test_db_creates_the_template(machine):
     machine.stub("createdb", f'echo "$*" >"{machine.home}/created"')
     result = machine.ok("repo", "add", machine.origin("My-App"), "--db")
     assert (machine.home / "created").read_text() == "my_app_dev\n"
-    assert "DATABASE_URL=postgres://localhost/my_app_dev" in result.stdout
+    assert "Database: my_app_dev\n" in result.stdout
+    env = (machine.home / "My-App/.env.local").read_text()
+    assert "DATABASE_URL=postgres://localhost/my_app_dev\n" in env
+    assert "DB_DATABASE=my_app_dev\n" in env
+    assert "DB_PASSWORD=\n" in env
+    assert "PORT=" not in env.replace("DB_PORT=", "")
+
+
+def test_db_leaves_an_existing_local_env_and_shows_the_settings(machine):
+    machine.stub("createdb", "exit 0")
+    result = machine.ok("repo", "add", machine.origin("app", {".env.local": "MINE=1\n"}), "--db")
+    assert (machine.home / "app/.env.local").read_text() == "MINE=1\n"
+    assert ".env.local already exists" in result.stderr
+    assert "  DB_DATABASE=app_dev\n" in result.stderr
+
+
+def test_db_warns_when_env_files_are_not_ignored(machine):
+    machine.stub("createdb", "exit 0")
+    (machine.home / ".gitignore_global").write_text("")
+    result = machine.ok("repo", "add", machine.origin("app"), "--db")
+    assert "!!! .env.local isn't gitignored" in result.stderr
+
+
+def test_no_db_writes_no_local_env(machine):
+    machine.ok("repo", "add", machine.origin("app"))
+    assert not (machine.home / "app/.env.local").exists()
 
 
 def test_db_failure_only_warns(machine):
@@ -221,7 +246,7 @@ def test_with_a_real_template(pg_machine):
         assert postgres.db_exists(db)
         checkout = machine.home / "group/devenv_repo_test"
         machine.ok("wt", "new", "feat", cwd=checkout)
-        assert "devenv_repo_test_feat" in ((checkout.parent / "feat/.env").read_text())
+        assert "devenv_repo_test_feat" in ((checkout.parent / "feat/.env.local").read_text())
     finally:
         for name in (db, "devenv_repo_test_feat"):
             postgres.drop(name)

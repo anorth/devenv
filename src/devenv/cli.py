@@ -11,7 +11,7 @@ from devenv.worktrees import list_worktrees, new_worktree, remove_worktree
 
 DESCRIPTION = """\
 Manage checkouts, worktrees and the user-level environment of a dev VM.
-It keeps no state of its own: git's worktree list, each worktree's .env,
+It keeps no state of its own: git's worktree list, each worktree's env files,
 Postgres and its naming rules say it all.
 """
 
@@ -19,10 +19,11 @@ WT_DESCRIPTION = """\
 Create, remove or list worktrees of the repo you're in: run it from the main
 checkout or any of its worktrees. Each worktree lives next to the main
 checkout in a directory of its own name, with its own dev server PORT in its
-.env. If a <dir>_dev database exists, each worktree also gets a copy of it, with
-DATABASE_URL in its .env. Databases are named after the checkout's directory,
-so give each repo on the machine a different one. A worktree keeps its name,
-port and database when it changes branch, which is plain git switch.
+.env.local and its .env linked to the main checkout's. If a <dir>_dev database
+exists, each worktree also gets a copy of it, with DATABASE_URL in its .env.local.
+Databases are named after the checkout's directory, so give each repo on the
+machine a different one. A worktree keeps its name, port and database when it
+changes branch, which is plain git switch.
 """
 
 

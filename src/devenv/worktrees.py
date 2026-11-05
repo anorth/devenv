@@ -1,11 +1,16 @@
 """Creating, removing and listing a checkout's worktrees."""
 
 import os
-import shutil
 from pathlib import Path
 
 from devenv import postgres, rules
-from devenv.envfile import env_file_get, env_file_set
+from devenv.envfile import (
+    LOCAL_ENV,
+    SHARED_ENV,
+    checkout_env_get,
+    env_file_set,
+    warn_if_env_not_ignored,
+)
 from devenv.git import Checkout, find_checkouts
 from devenv.setup import setup_checkout
 from devenv.system import capture, listening_ports, tailnet_name
@@ -13,12 +18,12 @@ from devenv.ui import Die, log, print_open_commands, warn
 
 
 def claimed_ports(checkout: Checkout) -> set[int]:
-    """Ports in the .env of every worktree of every checkout on the machine."""
+    """The port of every worktree of every checkout on the machine."""
     mains = {checkout.main, *find_checkouts(Path.home())}
     ports = set()
     for main in mains:
         for worktree in Checkout(main).worktrees():
-            port = env_file_get(Path(worktree.path) / ".env", "PORT")
+            port = checkout_env_get(Path(worktree.path), "PORT")
             if port.isdecimal():
                 ports.add(int(port))
     return ports
@@ -51,27 +56,37 @@ def _plan_checkout(checkout: Checkout, path: Path, branch: str, base: str | None
     return plan
 
 
-def _write_env(checkout: Checkout, path: Path, port: int, db: str | None) -> None:
-    log(f"Writing .env (PORT={port})")
-    env = path / ".env"
-    main_env = checkout.main / ".env"
-    if main_env.is_file():
-        shutil.copy(main_env, env)
+def _link_shared_env(checkout: Checkout, path: Path) -> None:
+    link = path / SHARED_ENV
+    main_env = checkout.main / SHARED_ENV
+    if os.path.lexists(link):
+        warn(f"the repo has its own {SHARED_ENV}, so this worktree doesn't share {main_env}")
+    elif main_env.is_file():
+        # Relative, so that a folder of checkouts can be moved.
+        link.symlink_to(os.path.relpath(main_env, path))
     else:
-        warn(f"{main_env} doesn't exist; the worktree's .env has only what devenv sets")
+        warn(f"{main_env} doesn't exist; the worktree has only what's in its {LOCAL_ENV}")
+
+
+def _write_env(checkout: Checkout, path: Path, port: int, db: str | None) -> None:
+    log(f"Writing {LOCAL_ENV} (PORT={port})")
+    _link_shared_env(checkout, path)
+    env = path / LOCAL_ENV
     env_file_set(env, "PORT", str(port))
     if db:
-        env_file_set(env, "DATABASE_URL", rules.database_url(db))
+        for key, value in postgres.connection_env(db).items():
+            env_file_set(env, key, value)
+    warn_if_env_not_ignored(path)
 
 
 def _print_summary(checkout: Checkout, path: Path, branch: str, port: int, db: str | None) -> None:
-    # Without a database of its own, the worktree keeps whatever DATABASE_URL the
-    # main .env has, e.g. a shared external database. Say so rather than "none".
+    # Without a database of its own, the worktree gets whatever DATABASE_URL the
+    # shared file has, e.g. a shared external database. Say so rather than "none".
     db_note = db
     if not db:
         db_note = "(none of its own)"
-        if env_file_get(path / ".env", "DATABASE_URL"):
-            db_note = f"(none of its own; uses DATABASE_URL copied from {checkout.main}/.env)"
+        if checkout_env_get(path, "DATABASE_URL"):
+            db_note = f"(none of its own; uses DATABASE_URL from its {SHARED_ENV})"
     host = tailnet_name()
     url = f"http://{host}:{port}" if host else (
         f"http://localhost:{port} (inside the VM: it isn't on the tailnet)"
@@ -138,8 +153,9 @@ def _uncommitted_changes(path: Path) -> list[str]:
     result = capture(["git", "-C", str(path), "status", "--porcelain"])
     if result.returncode != 0:
         raise Die(f"can't read the state of {path}: {result.stderr.strip()}")
-    # .env is ours, so it doesn't count as a change even if git doesn't ignore it.
-    return [line for line in result.stdout.splitlines() if line != "?? .env"]
+    # These are ours, so they don't count as changes even if git doesn't ignore them.
+    ours = {f"?? {SHARED_ENV}", f"?? {LOCAL_ENV}"}
+    return [line for line in result.stdout.splitlines() if line not in ours]
 
 
 def _merged_into(checkout: Checkout, branch: str, target: str) -> bool:
@@ -177,7 +193,7 @@ def remove_worktree(checkout: Checkout, name: str, force: bool = False) -> None:
     # A worktree can have the template's name if it predates the template.
     has_db = db != rules.template_db(checkout.dir) and postgres.db_exists(db)
     # Names can collide across checkouts, so the name alone doesn't make it ours.
-    env_db = rules.database_from_url(env_file_get(path / ".env", "DATABASE_URL"))
+    env_db = rules.database_from_url(checkout_env_get(path, "DATABASE_URL"))
     drop_db = has_db and env_db == db
 
     dirty = _uncommitted_changes(path)
@@ -208,7 +224,7 @@ def remove_worktree(checkout: Checkout, name: str, force: bool = False) -> None:
             raise Die(f"couldn't drop database {db}; drop it with: dropdb {db}")
     elif has_db:
         warn(
-            f"leaving database {db}: this worktree's .env doesn't use it. "
+            f"leaving database {db}: this worktree's env files don't use it. "
             f"If nothing else does, drop it with: dropdb {db}"
         )
 
@@ -223,8 +239,7 @@ def list_worktrees(checkout: Checkout) -> None:
     row = "{:<24} {:<32} {:<6} {:<32} {}"
     print(row.format("NAME", "BRANCH", "PORT", "DATABASE", "PATH"))
     for worktree in checkout.worktrees():
-        env = Path(worktree.path) / ".env"
-        db = rules.database_from_url(env_file_get(env, "DATABASE_URL"))
+        wt_path = Path(worktree.path)
+        db = rules.database_from_url(checkout_env_get(wt_path, "DATABASE_URL"))
         branch = worktree.branch or "(detached)"
-        name = Path(worktree.path).name
-        print(row.format(name, branch, env_file_get(env, "PORT"), db, worktree.path))
+        print(row.format(wt_path.name, branch, checkout_env_get(wt_path, "PORT"), db, worktree.path))
