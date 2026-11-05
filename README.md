@@ -40,9 +40,10 @@ dev server can keep running. A schema change to the template waits until the
 copy finishes, and settings made with `ALTER DATABASE` aren't copied.
 
 **`devenv wt rm`** removes the worktree, then drops its database, as long as
-the worktree's env files name that database. It refuses if there are uncommitted
-changes or the database is in use, unless you pass `--force`. The branch is
-deleted only if it's merged into the default branch.
+the worktree's `DATABASE_URL` or `DB_DATABASE` names that database, and the two
+don't disagree. It refuses if there are uncommitted changes or the database is
+in use, unless you pass `--force`. The branch is deleted only if it's merged into
+the default branch.
 
 **`devenv wt ls`** shows each worktree's name, branch, port, database and path.
 

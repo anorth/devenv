@@ -57,7 +57,7 @@ def test_rm_leaves_a_database_the_env_doesnt_name(pg_machine, repo):
     env.write_text("DATABASE_URL=postgres://localhost/something_else\n")
 
     result = pg_machine.ok("wt", "rm", "a", cwd=app)
-    assert f"!!! leaving database {name}_a: this worktree's env files don't use it." in result.stderr
+    assert f"!!! leaving database {name}_a: this worktree's env files name something_else." in result.stderr
     assert f"{name}_a" in database_names()
 
 
@@ -69,6 +69,27 @@ def test_locked_worktree_keeps_its_database(pg_machine, repo):
     assert result.returncode == 1
     assert "git worktree remove failed" in result.stderr
     assert f"{name}_a" in database_names()
+
+
+def test_rm_drops_a_database_named_only_by_db_database(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    env = pg_machine.home / "a/.env.local"
+    env.write_text(f"PORT=3001\nDB_DATABASE={name}_a\n")
+    assert f"{name}_a" in pg_machine.ok("wt", "ls", cwd=app).stdout
+    pg_machine.ok("wt", "rm", "a", cwd=app)
+    assert f"{name}_a" not in database_names()
+
+
+def test_rm_leaves_a_database_when_the_settings_disagree(pg_machine, repo):
+    app, name, _ = repo
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    env = pg_machine.home / "a/.env.local"
+    env.write_text(f"DATABASE_URL=postgres://localhost/{name}_a\nDB_DATABASE=other\n")
+    result = pg_machine.ok("wt", "rm", "a", cwd=app)
+    assert f"!!! leaving database {name}_a: this worktree's env files name other, {name}_a." in result.stderr
+    assert f"{name}_a" in database_names()
+    subprocess.run(["dropdb", f"{name}_a"], check=True)
 
 
 def test_name_of_the_template_is_refused(pg_machine, repo):

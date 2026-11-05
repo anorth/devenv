@@ -29,6 +29,12 @@ def checkout_env_get(path: Path, key: str) -> str:
     return env_file_get(path / LOCAL_ENV, key) or env_file_get(path / SHARED_ENV, key)
 
 
+def checkout_databases(path: Path) -> set[str]:
+    """The databases a checkout or worktree names, by either kind of setting."""
+    url = checkout_env_get(path, "DATABASE_URL")
+    return rules.databases_named(url, checkout_env_get(path, "DB_DATABASE"))
+
+
 def env_file_set(path: Path, key: str, value: str) -> None:
     text = rules.env_set(read_env(path), key, value)
     path.write_text(text, encoding="utf-8", errors="surrogateescape")

@@ -7,6 +7,7 @@ from devenv import postgres, rules
 from devenv.envfile import (
     LOCAL_ENV,
     SHARED_ENV,
+    checkout_databases,
     checkout_env_get,
     env_file_set,
     warn_if_env_not_ignored,
@@ -80,13 +81,13 @@ def _write_env(checkout: Checkout, path: Path, port: int, db: str | None) -> Non
 
 
 def _print_summary(checkout: Checkout, path: Path, branch: str, port: int, db: str | None) -> None:
-    # Without a database of its own, the worktree gets whatever DATABASE_URL the
+    # Without a database of its own, the worktree gets whatever settings the
     # shared file has, e.g. a shared external database. Say so rather than "none".
     db_note = db
     if not db:
         db_note = "(none of its own)"
-        if checkout_env_get(path, "DATABASE_URL"):
-            db_note = f"(none of its own; uses DATABASE_URL from its {SHARED_ENV})"
+        if checkout_databases(path):
+            db_note = f"(none of its own; uses the settings in its {SHARED_ENV})"
     host = tailnet_name()
     url = f"http://{host}:{port}" if host else (
         f"http://localhost:{port} (inside the VM: it isn't on the tailnet)"
@@ -193,8 +194,8 @@ def remove_worktree(checkout: Checkout, name: str, force: bool = False) -> None:
     # A worktree can have the template's name if it predates the template.
     has_db = db != rules.template_db(checkout.dir) and postgres.db_exists(db)
     # Names can collide across checkouts, so the name alone doesn't make it ours.
-    env_db = rules.database_from_url(checkout_env_get(path, "DATABASE_URL"))
-    drop_db = has_db and env_db == db
+    named = checkout_databases(path)
+    drop_db = has_db and named == {db}
 
     dirty = _uncommitted_changes(path)
     if dirty and not force:
@@ -224,7 +225,7 @@ def remove_worktree(checkout: Checkout, name: str, force: bool = False) -> None:
             raise Die(f"couldn't drop database {db}; drop it with: dropdb {db}")
     elif has_db:
         warn(
-            f"leaving database {db}: this worktree's env files don't use it. "
+            f"leaving database {db}: this worktree's env files name {', '.join(sorted(named)) or 'none'}. "
             f"If nothing else does, drop it with: dropdb {db}"
         )
 
@@ -240,6 +241,6 @@ def list_worktrees(checkout: Checkout) -> None:
     print(row.format("NAME", "BRANCH", "PORT", "DATABASE", "PATH"))
     for worktree in checkout.worktrees():
         wt_path = Path(worktree.path)
-        db = rules.database_from_url(checkout_env_get(wt_path, "DATABASE_URL"))
+        db = ",".join(sorted(checkout_databases(wt_path)))
         branch = worktree.branch or "(detached)"
         print(row.format(wt_path.name, branch, checkout_env_get(wt_path, "PORT"), db, worktree.path))

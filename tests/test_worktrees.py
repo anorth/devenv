@@ -135,7 +135,16 @@ def test_env_is_linked_and_local_env_is_the_worktrees_own(machine):
     path = machine.home / "group/a"
     assert (path / ".env").readlink() == Path("../app/.env")
     assert env_of(path) == "PORT=3001\n"
-    assert "uses DATABASE_URL from its .env" in result.stdout
+    assert "uses the settings in its .env" in result.stdout
+
+
+def test_db_fields_alone_are_recognised(machine):
+    app = machine.repo()
+    (app / ".env").write_text("DB_HOST=db.example.com\nDB_DATABASE=shared\n")
+    result = machine.ok("wt", "new", "a", cwd=app)
+    assert "uses the settings in its .env" in result.stdout
+    row = next(r for r in machine.ok("wt", "ls", cwd=app).stdout.splitlines() if r.startswith("a "))
+    assert "shared" in row
 
 
 def test_a_changed_secret_reaches_every_worktree(machine):

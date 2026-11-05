@@ -63,6 +63,11 @@ def database_from_url(url: str) -> str:
     return url.rsplit("/", 1)[-1].split("?", 1)[0]
 
 
+def databases_named(url: str, db_database: str) -> set[str]:
+    """The databases that a DATABASE_URL and a DB_DATABASE name: more than one is a conflict."""
+    return {name for name in (database_from_url(url), db_database) if name}
+
+
 def _without_export(line: str) -> str:
     return re.sub(r"^export[ \t]+", "", line)
 

@@ -174,3 +174,12 @@ def test_database_env():
         "DB_PASSWORD": "",
         "DB_DATABASE": "app_a",
     }
+
+
+def test_databases_named():
+    url = "postgres://localhost/a?x=1"
+    assert rules.databases_named(url, "") == {"a"}
+    assert rules.databases_named("", "a") == {"a"}
+    assert rules.databases_named(url, "a") == {"a"}
+    assert rules.databases_named(url, "b") == {"a", "b"}
+    assert rules.databases_named("", "") == set()
