@@ -35,9 +35,9 @@ def plan_checkout(clone_url: str, dir_arg: str | None) -> Path:
     if path.parent != home and os.path.lexists(path.parent / ".git"):
         raise Die(f"{path.parent} is a repo, so it can't hold a checkout. Pick another with --dir.")
     # Compare what's actually shared: my-app and my_app differ, but not in Postgres.
-    template = rules.template_db(path.name)
+    default_db = rules.default_db(path.name)
     for checkout in find_checkouts(home):
-        if rules.template_db(checkout.name) == template:
+        if rules.default_db(checkout.name) == default_db:
             raise Die(
                 f"the checkout at {checkout} would share databases with {path}. "
                 "Pick another name with --dir."
@@ -105,7 +105,7 @@ def add_repo(clone_url: str, path: Path, *, create_db: bool, run_setup: bool) ->
     """Clone a repo to a path from plan_checkout, and set it up."""
     _clone(clone_url, path)
 
-    db = rules.template_db(path.name) if create_db else None
+    db = rules.default_db(path.name) if create_db else None
     if db:
         log(f"Creating database {db}")
         if not postgres.create(db):

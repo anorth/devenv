@@ -31,19 +31,28 @@ origin's default branch. The worktree gets:
 - a directory next to the main checkout, called `<name>` as a slug;
 - a `.env` linked to the main checkout's, and a `.env.local` of its own with
   its `PORT`;
-- if `<dir>_dev` exists, its own copy of that database, with `DATABASE_URL` in
-  `.env.local`;
+- if the main checkout's env files name a local database, its own copy of it,
+  with the settings in `.env.local`;
 - its tools and dependencies, as `devenv setup` installs them.
 
 The database is copied with `pg_dump` and `pg_restore`, so the main checkout's
 dev server can keep running. A schema change to the template waits until the
 copy finishes, and settings made with `ALTER DATABASE` aren't copied.
 
+The template is the database the main checkout's `DATABASE_URL` or `DB_DATABASE`
+names, each read from `.env.local`, then `.env`.
+
+- If the two name different databases, `wt new` stops and changes nothing.
+- If neither is set, nothing is copied. The worktree gets whatever settings its
+  linked `.env` has.
+- If the settings point anywhere but the local Postgres, or the database doesn't
+  exist, `wt new` warns, and carries on as if neither were set.
+
 **`devenv wt rm`** removes the worktree, then drops its database, as long as
-the worktree's `DATABASE_URL` or `DB_DATABASE` names that database, and the two
-don't disagree. It refuses if there are uncommitted changes or the database is
-in use, unless you pass `--force`. The branch is deleted only if it's merged into
-the default branch.
+the worktree's `DATABASE_URL` or `DB_DATABASE` names that database, the two don't
+disagree, and the main checkout names neither. It refuses if there are
+uncommitted changes or the database is in use, unless you pass `--force`. The
+branch is deleted only if it's merged into the default branch.
 
 **`devenv wt ls`** shows each worktree's name, branch, port, database and path.
 
@@ -63,12 +72,12 @@ still run.
 **`devenv repo add`** clones a repo to `~/<dir>` or `~/<group>/<dir>`, by default
 named after the repo. A failed clone is retried for about 12 seconds, since new
 deploy keys take a moment to work. It refuses a path that already exists, a group
-that's a file, a repo or a checkout's worktree folder, and a name whose
-databases would clash with those of any existing checkout.
+that's a file or a repo, and a name whose databases would clash with those of
+any existing checkout.
 
-- `--db` creates the `<dir>_dev` template database, warning if that fails, and
-  writes its settings to `.env.local`. If that file exists, it warns and shows
-  them for you to add.
+- `--db` creates a `<dir>_dev` database, warning if that fails, and writes its
+  settings to `.env.local`, which makes it the template. If that file exists, it
+  warns and shows them for you to add.
 - `.env.example` is copied to `.env` if there's no `.env`.
 - `devenv setup` then `./setup.sh` run unless you pass `--no-setup`. A step that
   fails warns, and the rest still run.
@@ -120,10 +129,10 @@ repaired with ordinary tools.
   directory's name, so nothing else records it.
 - A checkout's directory name must be unique on the machine, whatever its
   folder, because databases are named after it.
-- The template database is `<dir>_dev`, and each worktree's is
-  `<dir>_<name>`. Both are lowercased, with any character outside
+- The template database is the local database the main checkout's env files
+  name. Each worktree's is `<dir>_<name>`, lowercased, with any character outside
   `[a-z0-9_]` turned into `_`, and cut to 63 characters. A worktree name that
-  would take the template's, such as `dev`, is refused.
+  would take the template's is refused.
 - `.env` is shared with the main checkout, and `.env.local` is a worktree's own.
 - `DATABASE_URL=postgres://localhost/<db>` has no user, so the client connects
   as the OS user. `DB_USER` is that user, on `localhost:5432`, with an empty

@@ -6,9 +6,13 @@ Pure functions only: nothing here runs a command or touches the filesystem.
 import json
 import re
 from dataclasses import dataclass
+from urllib.parse import parse_qs, unquote, urlsplit
 
 FIRST_PORT = 3001
 MAX_DB_NAME = 63
+POSTGRES_PORT = "5432"
+_LOCAL_HOSTS = {"", "localhost", "127.0.0.1"}
+_POSTGRES_SCHEMES = {"postgres", "postgresql"}
 _DIR_PART = r"[A-Za-z0-9_][A-Za-z0-9_.-]*"
 
 
@@ -32,7 +36,8 @@ def db_name(text: str) -> str:
     return re.sub(r"[^a-z0-9_]", "_", text.lower())[:MAX_DB_NAME]
 
 
-def template_db(checkout_dir: str) -> str:
+def default_db(checkout_dir: str) -> str:
+    """What `repo add --db` calls a checkout's own database."""
     return db_name(f"{checkout_dir}_dev")
 
 
@@ -52,7 +57,7 @@ def database_env(db: str, user: str) -> dict[str, str]:
     return {
         "DATABASE_URL": database_url(db),
         "DB_HOST": "localhost",
-        "DB_PORT": "5432",
+        "DB_PORT": POSTGRES_PORT,
         "DB_USER": user,
         "DB_PASSWORD": "",
         "DB_DATABASE": db,
@@ -60,12 +65,64 @@ def database_env(db: str, user: str) -> dict[str, str]:
 
 
 def database_from_url(url: str) -> str:
-    return url.rsplit("/", 1)[-1].split("?", 1)[0]
+    try:
+        path = urlsplit(url).path
+    except ValueError:
+        # Still the best guess, since `wt rm` won't drop a database that's named here.
+        path = url.partition("?")[0]
+    return unquote(path.rpartition("/")[2])
 
 
 def databases_named(url: str, db_database: str) -> set[str]:
     """The databases that a DATABASE_URL and a DB_DATABASE name: more than one is a conflict."""
     return {name for name in (database_from_url(url), db_database) if name}
+
+
+class DatabaseConflict(Exception):
+    """DATABASE_URL and DB_DATABASE name different databases."""
+
+
+def _is_local(host: str, port: str) -> bool:
+    return host.lower() in _LOCAL_HOSTS and port in ("", POSTGRES_PORT)
+
+
+def _url_is_local(url: str) -> bool:
+    """Whether a URL reaches only the local Postgres. One that can't be read doesn't."""
+    try:
+        parts = urlsplit(url)
+        port = str(parts.port or "")
+    except ValueError:
+        return False
+    # Postgres lets the query string set the host and port, and it overrides the rest.
+    query = parse_qs(parts.query)
+    return (
+        parts.scheme in _POSTGRES_SCHEMES
+        and _is_local(parts.hostname or "", port)
+        and all(_is_local(value, "") for value in query.get("host", []))
+        and all(_is_local("", value) for value in query.get("port", []))
+    )
+
+
+@dataclass(frozen=True)
+class NamedDatabase:
+    name: str
+    local: bool  # On the local Postgres, the only place pg_dump looks, for certain.
+
+
+def named_database(url: str, db_database: str, db_host: str, db_port: str) -> NamedDatabase | None:
+    """The database a checkout's settings name, if any.
+
+    Raises DatabaseConflict if they disagree, because a guess could copy the wrong data.
+    """
+    names = databases_named(url, db_database)
+    if len(names) > 1:
+        raise DatabaseConflict(
+            f"DATABASE_URL names {database_from_url(url)}, but DB_DATABASE names {db_database}"
+        )
+    if not names:
+        return None
+    local = (not url or _url_is_local(url)) and _is_local(db_host, db_port)
+    return NamedDatabase(names.pop(), local)
 
 
 def _without_export(line: str) -> str:

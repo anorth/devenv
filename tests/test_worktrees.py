@@ -252,9 +252,82 @@ def test_refuses_bad_branch_name(machine):
     assert "not a valid branch name: a..b" in result.stderr
 
 
+def record_database_tools(machine, existing="(none)"):
+    """Make `existing` the only database, and log every use of a Postgres tool."""
+    log = machine.home / "pg-calls"
+    machine.stub("psql", f"""cat >/dev/null; echo psql "$@" >>"{log}"
+case "$*" in *"name={existing}"*) echo 1;; esac""")
+    for tool in ("createdb", "pg_dump", "pg_restore"):
+        machine.stub(tool, f'echo {tool} "$@" >>"{log}"')
+    return log
+
+
+def test_disagreement_stops_with_nothing_created(machine):
+    log = record_database_tools(machine)
+    app = machine.repo()
+    (app / ".env").write_text("DATABASE_URL=postgres://localhost/one\n")
+    (app / ".env.local").write_text("DB_DATABASE=two\n")
+    result = machine.run("wt", "new", "a", cwd=app)
+    assert result.returncode == 1
+    assert "DATABASE_URL names one, but DB_DATABASE names two. Make them agree." in result.stderr
+    assert not (machine.home / "a").exists()
+    assert "refs/heads/a" not in git_out(app, "for-each-ref")
+    assert not log.exists()
+
+
+def test_no_fallback_to_the_conventional_name(machine):
+    log = record_database_tools(machine, existing="app_dev")
+    app = machine.repo()
+    result = machine.ok("wt", "new", "a", cwd=app)
+    assert "(none of its own)" in result.stdout
+    assert "name database" not in result.stderr
+    assert "DATABASE_URL" not in env_of(machine.home / "a")
+    assert not log.exists()
+
+
+def test_new_worktree_may_be_called_dev_if_thats_not_the_template(machine):
+    record_database_tools(machine, existing="app_dev")
+    app = machine.repo()
+    machine.ok("wt", "new", "dev", cwd=app)
+
+
+@pytest.mark.parametrize(
+    "file, settings, shared",
+    [
+        (".env", "DATABASE_URL=postgres://db.example.com/shared\n", True),
+        (".env", "DATABASE_URL=postgres://localhost/shared\nDB_HOST=db.example.com\n", True),
+        (".env.local", "DATABASE_URL=postgres://db.example.com/shared\n", False),
+    ],
+)
+def test_remote_database_is_not_copied(machine, file, settings, shared):
+    log = record_database_tools(machine, existing="shared")
+    app = machine.repo()
+    (app / ".env").write_text("SECRET=keep\n")
+    with (app / file).open("a") as env:
+        env.write(settings)
+    result = machine.ok("wt", "new", "a", cwd=app)
+    assert "DATABASE_URL" not in env_of(machine.home / "a")
+    assert not log.exists()
+    assert "name database shared, which isn't on the local Postgres" in result.stderr
+    assert ("uses the settings in its .env" in result.stdout) == shared
+    assert "(none of its own" in result.stdout
+
+
+def test_named_but_missing_database_warns(machine):
+    log = record_database_tools(machine)
+    app = machine.repo()
+    (app / ".env.local").write_text("DB_DATABASE=gone\n")
+    result = machine.ok("wt", "new", "a", cwd=app)
+    assert "name database gone, which doesn't exist" in result.stderr
+    assert "(none of its own" in result.stdout
+    assert "DATABASE_URL" not in env_of(machine.home / "a")
+    assert "createdb" not in log.read_text()
+
+
 def test_dies_when_postgres_cant_be_queried(machine):
     machine.stub("psql", "cat >/dev/null; exit 2")
     app = machine.repo()
+    (app / ".env.local").write_text("DB_DATABASE=app_main\n")
     result = machine.run("wt", "new", "a", cwd=app)
     assert result.returncode == 1
     assert "can't query Postgres; is it running?" in result.stderr

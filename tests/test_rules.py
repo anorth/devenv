@@ -30,13 +30,13 @@ def test_db_name_cuts_to_63():
     assert len(rules.worktree_db("repo", "b" * 80)) == 63
 
 
-def test_template_name_keeps_within_63():
-    assert rules.template_db("a" * 70) == "a" * 63
-    assert rules.template_db("a" * 60) == "a" * 60 + "_de"
+def test_default_db_keeps_within_63():
+    assert rules.default_db("a" * 70) == "a" * 63
+    assert rules.default_db("a" * 60) == "a" * 60 + "_de"
 
 
 def test_template_and_worktree_names():
-    assert rules.template_db("My-App") == "my_app_dev"
+    assert rules.default_db("My-App") == "my_app_dev"
     assert rules.worktree_db("My-App", "feat-x") == "my_app_feat_x"
 
 
@@ -45,6 +45,9 @@ def test_template_and_worktree_names():
     [
         ("postgres://localhost/app_x", "app_x"),
         ("postgres://u:p@host:5432/app?sslmode=require", "app"),
+        ("postgresql://localhost/my%2Dapp%20x", "my-app x"),
+        ("postgres://localhost/app#fragment", "app"),
+        ("postgres://[broken/app?x=1", "app"),
         ("", ""),
     ],
 )
@@ -183,3 +186,58 @@ def test_databases_named():
     assert rules.databases_named(url, "a") == {"a"}
     assert rules.databases_named(url, "b") == {"a", "b"}
     assert rules.databases_named("", "") == set()
+
+
+@pytest.mark.parametrize(
+    "url, db_database, host, port, name, local",
+    [
+        ("postgres://localhost/a", "", "", "", "a", True),
+        ("", "a", "", "", "a", True),
+        ("postgres://localhost/a", "a", "", "", "a", True),
+        # Who's connecting doesn't matter, only where to.
+        ("postgres://u:p@localhost:5432/a", "", "", "", "a", True),
+        ("postgresql://127.0.0.1/a", "", "", "", "a", True),
+        ("postgres:///a", "", "", "", "a", True),
+        ("postgres://LOCALHOST/a?schema=public", "", "", "", "a", True),
+        ("postgres://localhost/my%2Dapp", "my-app", "", "", "my-app", True),
+        ("", "a", "localhost", "5432", "a", True),
+        ("", "a", "127.0.0.1", "", "a", True),
+        ("", "a", "LocalHost", "", "a", True),
+        ("postgres://localhost/a?host=localhost&port=5432", "", "", "", "a", True),
+        # A remote host or another port, by any route.
+        ("postgres://db.example.com/a", "", "", "", "a", False),
+        ("postgres://localhost:5433/a", "", "", "", "a", False),
+        ("postgres://localhost/a?host=db.example.com", "", "", "", "a", False),
+        ("postgres://localhost/a?port=5433", "", "", "", "a", False),
+        ("postgres:///a?host=/var/run/postgresql", "", "", "", "a", False),
+        ("", "a", "db.example.com", "", "a", False),
+        ("", "a", "localhost", "5433", "a", False),
+        ("postgres://localhost/a", "", "db.example.com", "", "a", False),
+        ("postgres://localhost/a", "", "localhost", "5433", "a", False),
+        ("postgres://db.example.com/a", "a", "localhost", "5432", "a", False),
+        # Several hosts, of which only the first is local.
+        ("postgres://localhost,db.example.com/a", "", "", "", "a", False),
+        ("postgres://localhost:5432,db.example.com:5432/a", "", "", "", "a", False),
+        # Not a URL for Postgres at all, or one that can't be read.
+        ("mysql://localhost/a", "", "", "", "a", False),
+        ("file:./dev.db", "", "", "", "dev.db", False),
+        ("db.example.com/a", "", "", "", "a", False),
+        ("postgres://localhost:port/a", "", "", "", "a", False),
+        ("postgres://[broken/a", "a", "", "", "a", False),
+    ],
+)
+def test_named_database(url, db_database, host, port, name, local):
+    assert rules.named_database(url, db_database, host, port) == rules.NamedDatabase(name, local)
+
+
+def test_no_database_named():
+    assert rules.named_database("", "", "localhost", "5432") is None
+
+
+@pytest.mark.parametrize(
+    "url, host",
+    [("postgres://localhost/a", ""), ("postgres://db.example.com/a", "db.example.com")],
+)
+def test_named_database_stops_on_a_disagreement(url, host):
+    with pytest.raises(rules.DatabaseConflict, match="DATABASE_URL names a, but DB_DATABASE names b"):
+        rules.named_database(url, "b", host, "")

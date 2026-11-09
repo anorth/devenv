@@ -21,7 +21,8 @@ worktree. A worktree sits next to the main checkout, and keeps its name, port
 and database when it changes branch, which is plain git switch.
 
 Its .env links to the main checkout's, and its own .env.local holds its PORT. If
-a <dir>_dev database exists, it gets its own copy, with the settings in .env.local.
+the main checkout's env files name a local database, by DATABASE_URL or
+DB_DATABASE, the worktree gets its own copy, with the settings in .env.local.
 """
 
 
@@ -67,7 +68,7 @@ def _parser() -> argparse.ArgumentParser:
         "new",
         help="create a worktree with its own port and database",
         description="Create a worktree called <name>, with its own port and, "
-        "if there's a <dir>_dev database, its own copy of it.",
+        "if the main checkout's env files name a local database, its own copy of it.",
     )
     new.add_argument(
         "name",
@@ -147,8 +148,8 @@ def _parser() -> argparse.ArgumentParser:
     add.add_argument(
         "--db",
         action="store_true",
-        help="create a <dir>_dev database, which devenv wt new then copies for each "
-        "worktree, and write its settings to .env.local",
+        help="create a <dir>_dev database and write its settings to .env.local, so that "
+        "devenv wt new copies it for each worktree",
     )
     add.add_argument(
         "--no-setup",

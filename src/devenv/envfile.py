@@ -35,6 +35,11 @@ def checkout_databases(path: Path) -> set[str]:
     return rules.databases_named(url, checkout_env_get(path, "DB_DATABASE"))
 
 
+def checkout_named_database(path: Path) -> rules.NamedDatabase | None:
+    keys = ("DATABASE_URL", "DB_DATABASE", "DB_HOST", "DB_PORT")
+    return rules.named_database(*(checkout_env_get(path, key) for key in keys))
+
+
 def env_file_set(path: Path, key: str, value: str) -> None:
     text = rules.env_set(read_env(path), key, value)
     path.write_text(text, encoding="utf-8", errors="surrogateescape")

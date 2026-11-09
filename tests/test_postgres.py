@@ -24,11 +24,12 @@ def database_names():
 
 @pytest.fixture
 def repo(pg_machine):
-    """A checkout with a uniquely named directory and its <dir>_dev database."""
+    """A checkout with a uniquely named directory and the database it names."""
     name = f"t{uuid.uuid4().hex[:10]}"
     app = pg_machine.repo(name)
     template = f"{name}_dev"
     subprocess.run(["createdb", template], check=True)
+    (app / ".env.local").write_text(f"DATABASE_URL=postgres://localhost/{template}\n")
     yield app, name, template
     for db in database_names():
         if db.startswith(name):
@@ -118,17 +119,54 @@ def test_database_stays_with_the_name_across_branches(pg_machine, repo):
     assert f"{name}_long" not in database_names()
 
 
-def test_rm_never_drops_the_template(pg_machine):
+@pytest.mark.parametrize(
+    "main_env",
+    [
+        "DATABASE_URL=postgres://localhost/{db}\n",
+        "DB_DATABASE={db}\n",
+        "DATABASE_URL=postgres://localhost/{db}\nDB_DATABASE=other\n",
+        "DATABASE_URL=postgres://localhost/other\nDB_DATABASE={db}\n",
+    ],
+)
+def test_rm_never_drops_what_the_main_checkout_names(pg_machine, main_env):
     name = f"t{uuid.uuid4().hex[:10]}"
     app = pg_machine.repo(name)
     template = f"{name}_dev"
     pg_machine.ok("wt", "new", "dev", cwd=app)  # before the template exists
     subprocess.run(["createdb", template], check=True)
+    # The worktree claims it too, which would otherwise be enough to drop it.
+    (pg_machine.home / "dev/.env.local").write_text(f"DB_DATABASE={template}\n")
+    (app / ".env.local").write_text(main_env.format(db=template))
     try:
         pg_machine.ok("wt", "rm", "dev", cwd=app)
         assert template in database_names()
     finally:
         subprocess.run(["dropdb", "--if-exists", template], check=True)
+
+
+def test_template_with_an_unconventional_name(pg_machine, repo):
+    app, name, _ = repo
+    template = f"{name} Odd-Name"
+    subprocess.run(["createdb", template], check=True)
+    fill_template(template)
+    encoded = template.replace(" ", "%20")
+    (app / ".env.local").write_text(f"DATABASE_URL=postgres://localhost/{encoded}?schema=public\n")
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    assert rows(f"{name}_a") == "7"
+    pg_machine.ok("wt", "rm", "a", cwd=app)
+    assert template in database_names()
+    assert f"{name}_a" not in database_names()
+
+
+def test_local_env_overrides_the_shared_one(pg_machine, repo):
+    app, name, template = repo
+    subprocess.run(["createdb", f"{name}_real"], check=True)
+    fill_template(f"{name}_real")
+    (app / ".env").write_text(f"DB_DATABASE={template}\n")
+    (app / ".env.local").write_text(f"DB_DATABASE={name}_real\n")
+    pg_machine.ok("wt", "new", "a", cwd=app)
+    assert rows(f"{name}_a") == "7"
+    pg_machine.ok("wt", "rm", "a", cwd=app)
 
 
 def test_refuses_existing_database(pg_machine, repo):
@@ -155,6 +193,13 @@ def hold_connection(db):
     pytest.fail("the holding connection never appeared")
 
 
+def rows(db):
+    """What fill_template put in a database, or a copy of one."""
+    return subprocess.run(
+        ["psql", "-X", "-At", "-d", db, "-c", "SELECT n FROM t"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
 def fill_template(template):
     subprocess.run(
         ["psql", "-X", "-q", "-d", template, "-c", "CREATE TABLE t (n int PRIMARY KEY); INSERT INTO t VALUES (7)"],
@@ -166,11 +211,7 @@ def test_copies_the_data(pg_machine, repo):
     app, name, template = repo
     fill_template(template)
     pg_machine.ok("wt", "new", "a", cwd=app)
-    copied = subprocess.run(
-        ["psql", "-X", "-At", "-d", f"{name}_a", "-c", "SELECT n FROM t"],
-        check=True, capture_output=True, text=True,
-    )
-    assert copied.stdout.strip() == "7"
+    assert rows(f"{name}_a") == "7"
 
 
 def test_copies_while_the_template_is_in_use(pg_machine, repo):

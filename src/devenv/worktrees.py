@@ -9,6 +9,7 @@ from devenv.envfile import (
     SHARED_ENV,
     checkout_databases,
     checkout_env_get,
+    checkout_named_database,
     env_file_set,
     warn_if_env_not_ignored,
 )
@@ -100,6 +101,26 @@ def _print_summary(checkout: Checkout, path: Path, branch: str, port: int, db: s
         print_open_commands(host, path)
 
 
+def _find_template(checkout: Checkout) -> str | None:
+    """The database for a new worktree to copy, if there's one to copy."""
+    try:
+        named = checkout_named_database(checkout.main)
+    except rules.DatabaseConflict as conflict:
+        raise Die(f"{checkout.main}'s env files disagree: {conflict}. Make them agree.") from None
+    if named is None:
+        return None
+    if not named.local:
+        warn(
+            f"{checkout.main}'s env files name database {named.name}, "
+            "which isn't on the local Postgres, so it won't be copied"
+        )
+        return None
+    if not postgres.db_exists(named.name):
+        warn(f"{checkout.main}'s env files name database {named.name}, which doesn't exist")
+        return None
+    return named.name
+
+
 def new_worktree(
     checkout: Checkout, name: str, branch: str | None = None, base: str | None = None
 ) -> None:
@@ -110,20 +131,19 @@ def new_worktree(
     if capture(["git", "check-ref-format", "--branch", branch]).returncode != 0:
         raise Die(f"not a valid branch name: {branch}. Choose one with --branch.")
     path = checkout.worktree_path(slug)
-    template = rules.template_db(checkout.dir)
-    # Worktrees get a database only if the repo has one.
-    db = rules.worktree_db(checkout.dir, slug) if postgres.db_exists(template) else None
-    if db == template:
-        raise Die(
-            f"worktree {slug} would use the name of the template database, {template}. "
-            "Pick another name, and use --branch if you want that branch."
-        )
-
     if path.exists() or path.is_symlink():
         raise Die(f"{path} already exists. Pick another name.")
     existing = checkout.worktree_for_branch(branch)
     if existing:
         raise Die(f"branch {branch} is already checked out at {existing}")
+    template = _find_template(checkout)
+    # Worktrees get a database only if the repo has one.
+    db = rules.worktree_db(checkout.dir, slug) if template else None
+    if template and db == template:
+        raise Die(
+            f"worktree {slug} would use the name of the template database, {template}. "
+            "Pick another name, and use --branch if you want that branch."
+        )
     if db and postgres.db_exists(db):
         raise Die(f"database {db} already exists. If nothing uses it, drop it with: dropdb {db}")
 
@@ -191,8 +211,9 @@ def remove_worktree(checkout: Checkout, name: str, force: bool = False) -> None:
     if path == checkout.main:
         raise Die("refusing to remove the main checkout")
     db = rules.worktree_db(checkout.dir, path.name)
-    # A worktree can have the template's name if it predates the template.
-    has_db = db != rules.template_db(checkout.dir) and postgres.db_exists(db)
+    # A worktree can have the template's name if it predates the template. Either
+    # setting protects a database, because they may disagree.
+    has_db = db not in checkout_databases(checkout.main) and postgres.db_exists(db)
     # Names can collide across checkouts, so the name alone doesn't make it ours.
     named = checkout_databases(path)
     drop_db = has_db and named == {db}
