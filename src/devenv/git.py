@@ -10,6 +10,11 @@ from devenv.system import call, capture
 from devenv.ui import Die, log
 
 
+def same_path(a: str | Path, b: str | Path) -> bool:
+    """Whether two paths name the same place, through any symlinks."""
+    return os.path.realpath(a) == os.path.realpath(b)
+
+
 @dataclass(frozen=True)
 class Checkout:
     """A repo's main checkout, which any of its worktrees can lead back to."""
@@ -43,10 +48,19 @@ class Checkout:
     def worktrees(self) -> list[rules.Worktree]:
         return rules.parse_worktree_list(self.git_output("worktree", "list", "--porcelain").stdout)
 
-    def worktree_named(self, name: str) -> rules.Worktree | None:
-        """A worktree by name, which is its directory's: nothing else records it."""
+    def worktrees_named(self, name: str) -> list[rules.Worktree]:
+        """Worktrees by name, which is their directory's: nothing else records it.
+
+        The main checkout is in the list too, under its own name. Names are
+        meant to be unique, but a worktree made by hand or by another tool can
+        share one, so this returns every match.
+        """
+        return [w for w in self.worktrees() if Path(w.path).name == name]
+
+    def worktree_at(self, path: Path) -> rules.Worktree | None:
+        """The worktree whose top folder is `path`, if git lists one there."""
         for worktree in self.worktrees():
-            if Path(worktree.path).name == name:
+            if same_path(worktree.path, path):
                 return worktree
         return None
 
@@ -62,10 +76,16 @@ class Checkout:
         return result.stdout.strip().removeprefix("origin/") if result.returncode == 0 else "main"
 
 
-def current_checkout() -> Checkout:
-    """The repo you're in. Its main checkout is where the shared .git lives."""
-    result = capture(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"])
+def current_checkout(path: Path | None = None) -> Checkout:
+    """The repo that `path` (default: the current directory) is in.
+
+    Its main checkout is where the shared .git lives.
+    """
+    where = ["-C", str(path)] if path is not None else []
+    result = capture(["git", *where, "rev-parse", "--path-format=absolute", "--git-common-dir"])
     if result.returncode != 0:
+        if path is not None:
+            raise Die(f"{path} isn't in a git checkout")
         raise Die("run devenv inside a git checkout, e.g. cd ~/<repo>")
     common = Path(result.stdout.rstrip("\n"))
     if common.name != ".git":

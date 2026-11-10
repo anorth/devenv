@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from conftest import git
+from conftest import git, git_out
 from devenv import postgres
 
 
@@ -15,6 +15,12 @@ from devenv import postgres
 def sql(query):
     return subprocess.run(
         ["psql", "-X", "-At", "-d", "postgres", "-c", query], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def sql_in(db, query):
+    return subprocess.run(
+        ["psql", "-X", "-At", "-d", db, "-c", query], check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
@@ -276,3 +282,82 @@ def test_names_reach_sql_as_values(pg_machine):
     assert not postgres.db_exists("it's'; DROP DATABASE postgres; --")
     assert postgres.db_connections("it's") == 0
     assert postgres.db_exists("postgres")
+
+
+# ---------------------------------------------------------------- worktrees made by something else
+
+
+def orca_worktree(pg_machine, app, name="x"):
+    """A worktree made with plain git worktree add, outside the checkout's folder."""
+    path = pg_machine.home / "orca-workspaces" / app.name / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    git(app, "worktree", "add", "-q", "-b", name, str(path))
+    return path
+
+
+def test_init_copies_the_template_once(pg_machine, repo):
+    app, name, template = repo
+    sql_in(template, "CREATE TABLE t (v int); INSERT INTO t VALUES (7)")
+    (app / ".env").touch()
+    path = orca_worktree(pg_machine, app)
+    first = pg_machine.ok("wt", "init", cwd=path)
+    db = f"{name}_x"
+    assert f"Copying database {template} to {db}" in first.stdout
+    assert f"DATABASE_URL=postgres://localhost/{db}\n" in (path / ".env.local").read_text()
+    assert sql_in(db, "SELECT v FROM t") == "7"
+
+    # A change made in the worktree's database survives a second init.
+    sql_in(db, "INSERT INTO t VALUES (8)")
+    env = (path / ".env.local").read_bytes()
+    again = pg_machine.ok("wt", "init", cwd=path)
+    assert "Copying database" not in again.stdout
+    assert "!!!" not in again.stderr
+    assert (path / ".env.local").read_bytes() == env
+    assert sql_in(db, "SELECT count(*) FROM t") == "2"
+
+
+def test_init_refuses_a_database_the_worktree_doesnt_name(pg_machine, repo):
+    app, name, _ = repo
+    path = orca_worktree(pg_machine, app)
+    subprocess.run(["createdb", f"{name}_x"], check=True)
+    result = pg_machine.run("wt", "init", cwd=path)
+    assert result.returncode == 1
+    assert f"database {name}_x already exists" in result.stderr
+    assert not (path / ".env.local").exists()
+
+
+def test_archive_drops_the_database_and_leaves_the_worktree(pg_machine, repo):
+    app, name, _ = repo
+    path = orca_worktree(pg_machine, app)
+    pg_machine.ok("wt", "init", cwd=path)
+    result = pg_machine.ok("wt", "archive", cwd=path)
+    assert f"Dropping database {name}_x\n" in result.stdout
+    assert f"{name}_x" not in database_names()
+    assert path.is_dir()
+    assert git_out(app, "branch", "--list", "x") != ""
+
+
+def test_archive_leaves_what_the_main_checkout_names(pg_machine, repo):
+    app, name, template = repo
+    path = orca_worktree(pg_machine, app)
+    pg_machine.ok("wt", "init", cwd=path)
+    # The main checkout comes to name the worktree's database too.
+    (app / ".env.local").write_text(f"DATABASE_URL=postgres://localhost/{name}_x\n")
+    pg_machine.ok("wt", "archive", cwd=path)
+    assert f"{name}_x" in database_names()
+    assert template in database_names()
+
+
+def test_archive_drops_a_database_in_use(pg_machine, repo):
+    app, name, _ = repo
+    path = orca_worktree(pg_machine, app)
+    pg_machine.ok("wt", "init", cwd=path)
+    db = f"{name}_x"
+    holder = hold_connection(db)
+    try:
+        result = pg_machine.ok("wt", "archive", cwd=path)
+        assert f"Dropping database {db}, closing its 1 connection(s)" in result.stdout
+        assert holder.wait(timeout=10) != 0
+    finally:
+        holder.kill()
+    assert db not in database_names()

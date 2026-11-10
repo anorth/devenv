@@ -8,7 +8,13 @@ from devenv.git import current_checkout
 from devenv.repos import add_repo, plan_checkout
 from devenv.setup import setup_checkout
 from devenv.ui import guarded, log
-from devenv.worktrees import list_worktrees, new_worktree, remove_worktree
+from devenv.worktrees import (
+    archive_worktree,
+    init_worktree,
+    list_worktrees,
+    new_worktree,
+    remove_worktree,
+)
 
 DESCRIPTION = """\
 Manage checkouts, worktrees and the user-level environment of a dev machine.
@@ -18,8 +24,10 @@ its naming rules say it all.
 
 WT_DESCRIPTION = """\
 Manage the worktrees of the repo you're in, from its main checkout or any
-worktree. A worktree sits next to the main checkout, and keeps its name, port
-and database when it changes branch, which is plain git switch.
+worktree. wt new puts a worktree next to the main checkout; one that something
+else made can be anywhere, and wt init sets it up. A worktree's name is its
+folder's, unique within the repo, and it keeps its name, port and database when
+it changes branch, which is plain git switch.
 
 Its .env links to the main checkout's, and its own .env.local holds its PORT. If
 the main checkout's env files name a local database, by DATABASE_URL or
@@ -33,6 +41,14 @@ def _wt_new(args: argparse.Namespace) -> None:
 
 def _wt_rm(args: argparse.Namespace) -> None:
     remove_worktree(current_checkout(), args.name, args.force)
+
+
+def _wt_init(args: argparse.Namespace) -> None:
+    init_worktree(Path(args.path))
+
+
+def _wt_archive(args: argparse.Namespace) -> None:
+    archive_worktree(Path(args.path))
 
 
 def _wt_ls(args: argparse.Namespace) -> None:
@@ -104,13 +120,43 @@ def _parser() -> argparse.ArgumentParser:
         description="Remove a worktree and drop its database, if it has one. "
         "Its current branch is deleted too if it's merged into the default branch.",
     )
-    rm.add_argument("name", metavar="<name>", help="the worktree's name, as devenv wt ls shows it")
+    rm.add_argument(
+        "name",
+        metavar="<name>|<path>",
+        help="the worktree's name, as devenv wt ls shows it, or its path (with a /, e.g. ./x). "
+        "A name more than one worktree has is refused: give the path",
+    )
     rm.add_argument(
         "--force",
         action="store_true",
         help="remove even with uncommitted changes, and drop the database even while it's in use",
     )
     rm.set_defaults(run=_wt_rm)
+
+    init = wt_commands.add_parser(
+        "init",
+        help="give an existing worktree its own port and database",
+        description="Give a worktree that something else created, such as git worktree add or "
+        "a worktree UI's setup script, what devenv wt new would have: its own port and, if the "
+        "main checkout's env files name a local database, its own copy of it, then its tools "
+        "and dependencies. Running it again keeps what's already in place.",
+    )
+    init.add_argument(
+        "path", metavar="<path>", nargs="?", default=".", help="the worktree's top folder (default: .)"
+    )
+    init.set_defaults(run=_wt_init)
+
+    archive = wt_commands.add_parser(
+        "archive",
+        help="drop a worktree's database, leaving the worktree",
+        description="Drop a worktree's database, by the rules devenv wt rm uses, and leave the "
+        "worktree and its branch for something else to remove, such as a worktree UI's archive "
+        "script. A database in use is dropped anyway, closing its connections.",
+    )
+    archive.add_argument(
+        "path", metavar="<path>", nargs="?", default=".", help="the worktree's top folder (default: .)"
+    )
+    archive.set_defaults(run=_wt_archive)
 
     ls = wt_commands.add_parser(
         "ls",

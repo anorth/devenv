@@ -631,7 +631,147 @@ def test_usage_errors_exit_2(machine):
 
 
 @pytest.mark.parametrize(
-    "args", [(), ("wt",), ("wt", "new"), ("wt", "rm"), ("wt", "ls"), ("setup",)]
+    "args",
+    [
+        (),
+        ("wt",),
+        ("wt", "new"),
+        ("wt", "rm"),
+        ("wt", "ls"),
+        ("wt", "init"),
+        ("wt", "archive"),
+        ("setup",),
+        ("apply",),
+        ("upgrade",),
+    ],
 )
 def test_help(machine, args):
     assert "usage: devenv" in machine.ok(*args, "--help").stdout
+
+
+# ---------------------------------------------------------------- worktrees made by something else
+
+
+def hand_made(machine, app, rel, branch=None):
+    """A worktree made with plain git worktree add, as a UI such as Orca would."""
+    path = machine.home / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    git(app, "worktree", "add", "-q", "-b", branch or path.name, str(path))
+    return path
+
+
+@pytest.mark.parametrize("rel", ["x", "orca-workspaces/app/x"])
+def test_init_configures_a_hand_made_worktree(machine, rel):
+    app = machine.repo()
+    (app / ".env").write_text("SECRET=1\n")
+    path = hand_made(machine, app, rel)
+    result = machine.ok("wt", "init", cwd=path)
+    assert env_of(path) == "PORT=3001\n"
+    assert (path / ".env").is_symlink()
+    assert (path / ".env").read_text() == "SECRET=1\n"
+    assert f"Worktree ready: {path}" in result.stdout
+    assert "  branch    x\n" in result.stdout
+    listing = machine.ok("wt", "ls", cwd=app).stdout
+    assert "3001" in listing and str(path) in listing
+
+
+def test_init_takes_a_path(machine):
+    app = machine.repo()
+    path = hand_made(machine, app, "elsewhere/x")
+    machine.ok("wt", "init", str(path), cwd=app)
+    assert env_of(path) == "PORT=3001\n"
+
+
+def test_a_second_init_changes_nothing(machine):
+    app = machine.repo()
+    (app / ".env").touch()
+    path = hand_made(machine, app, "orca/x")
+    machine.ok("wt", "init", cwd=path)
+    before = env_of(path)
+    # Something else listening on its port mustn't move it.
+    (machine.bin / "ss-output").write_text("LISTEN 0 511 *:3001 *:*\n")
+    again = machine.ok("wt", "init", cwd=path)
+    assert env_of(path) == before
+    assert "!!!" not in again.stderr
+
+
+def test_init_refuses_the_main_checkout(machine):
+    app = machine.repo()
+    result = machine.run("wt", "init", cwd=app)
+    assert result.returncode == 1
+    assert "is the main checkout" in result.stderr
+    assert not (app / ".env.local").exists()
+
+
+def test_init_refuses_a_folder_that_isnt_a_worktree(machine):
+    app = machine.repo()
+    (app / "sub").mkdir()
+    for cwd, message in [(app / "sub", "isn't the top folder"), (machine.home, "isn't in a git checkout")]:
+        result = machine.run("wt", "init", str(cwd), cwd=app)
+        assert result.returncode == 1
+        assert message in result.stderr
+
+
+def test_init_refuses_a_name_another_worktree_has(machine):
+    app = machine.repo()
+    first = hand_made(machine, app, "x")
+    second = hand_made(machine, app, "orca/x", branch="other")
+    result = machine.run("wt", "init", cwd=second)
+    assert result.returncode == 1
+    assert f"already named x, at {first}" in result.stderr
+    assert not (second / ".env.local").exists()
+
+
+def test_new_refuses_a_name_a_worktree_elsewhere_has(machine):
+    app = machine.repo()
+    elsewhere = hand_made(machine, app, "orca/x", branch="other")
+    result = machine.run("wt", "new", "x", cwd=app)
+    assert result.returncode == 1
+    assert f"already named x, at {elsewhere}" in result.stderr
+    assert not (machine.home / "x").exists()
+
+
+def test_rm_refuses_a_name_two_worktrees_have(machine):
+    app = machine.repo()
+    first = hand_made(machine, app, "x")
+    second = hand_made(machine, app, "orca/x", branch="other")
+    result = machine.run("wt", "rm", "x", cwd=app)
+    assert result.returncode == 1
+    assert "more than one worktree is named x:\n" in result.stderr
+    assert f"  {first}\n" in result.stderr and f"  {second}\n" in result.stderr
+    assert "Give the path" in result.stderr
+    assert first.is_dir() and second.is_dir()
+
+
+def test_rm_by_path_removes_only_that_one(machine):
+    app = machine.repo()
+    first = hand_made(machine, app, "x")
+    second = hand_made(machine, app, "orca/x", branch="other")
+    machine.ok("wt", "rm", str(second), cwd=app)
+    assert first.is_dir() and not second.exists()
+    machine.ok("wt", "rm", "../x", cwd=app)
+    assert not first.exists()
+
+
+def test_archive_without_a_database_leaves_everything(machine):
+    app = machine.repo()
+    path = hand_made(machine, app, "orca/x")
+    machine.ok("wt", "init", cwd=path)
+    result = machine.ok("wt", "archive", cwd=path)
+    assert "has no database of its own to drop" in result.stdout
+    assert path.is_dir()
+    assert git_out(app, "branch", "--list", "x") != ""
+
+
+def test_archive_refuses_the_main_checkout(machine):
+    app = machine.repo()
+    result = machine.run("wt", "archive", cwd=app)
+    assert result.returncode == 1
+    assert "is the main checkout" in result.stderr
+
+
+def test_rm_of_a_path_that_isnt_a_worktree_says_so(machine):
+    app = machine.repo()
+    result = machine.run("wt", "rm", "./nope", cwd=app)
+    assert result.returncode == 1
+    assert f"no worktree is at {app}/nope, and none is named nope" in result.stderr

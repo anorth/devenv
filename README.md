@@ -14,8 +14,10 @@ From a checkout, use `uv tool install .`.
 
 ```
 devenv wt new <name> [--branch <branch>] [--base <branch>]
-devenv wt rm <name> [--force]
+devenv wt rm <name>|<path> [--force]
 devenv wt ls
+devenv wt init [<path>]
+devenv wt archive [<path>]
 devenv setup [<path>]
 devenv repo add <clone-url> [--dir <dir>|<group>/<dir>] [--db] [--no-setup] [--check]
 devenv apply
@@ -50,7 +52,9 @@ names, each read from `.env.local`, then `.env`.
 - If the settings point anywhere but the local Postgres, or the database doesn't
   exist, `wt new` warns, and carries on as if neither were set.
 
-**`devenv wt rm`** removes the worktree, then drops its database, as long as
+**`devenv wt rm`** takes a worktree's name, or its path (anything with a `/`, such
+as `./x`). If more than one worktree has that name, it refuses and lists their paths.
+It removes the worktree, then drops its database, as long as
 the worktree's `DATABASE_URL` or `DB_DATABASE` names that database, the two don't
 disagree, and the main checkout names neither. It refuses if there are
 uncommitted changes or the database is in use, unless you pass `--force`. The
@@ -63,8 +67,39 @@ plain `git switch`. `wt rm` takes that name, and considers deleting only the
 branch the worktree is on at that point.
 
 Worktree names share the folder with whatever else is in it, including other
-repos' worktrees, so `wt new` refuses a name that's already there. Add a prefix
+repos' worktrees, so `wt new` refuses a name that's already there. It also refuses
+a name that any other worktree of the repo has, wherever that is. Add a prefix
 to the name if that happens.
+
+**`devenv wt init [<path>]`** gives a worktree that something else made, with
+`git worktree add` or a worktree UI, what `wt new` would have: the `.env` link, a
+`.env.local` with its `PORT`, its own copy of the template database, and its tools
+and dependencies. The path defaults to the current directory, and must be the top
+folder of a worktree, not the main checkout. Running it again keeps the port and
+database it has. It refuses a name another of the repo's worktrees has, and a
+database by its name that its `.env.local` doesn't name.
+
+**`devenv wt archive [<path>]`** drops a worktree's database, by `wt rm`'s rules,
+and leaves the worktree and branch for whatever made them to remove. A database in
+use is dropped anyway, closing its connections, since by then the worktree is
+being deleted.
+
+### Worktree UIs such as Orca
+
+A UI that creates and deletes worktrees itself can call these from its setup and
+archive scripts. For [Orca](https://onorca.dev), in the repo's `orca.yaml`:
+
+```yaml
+scripts:
+  setup: devenv wt init
+  archive: devenv wt archive
+```
+
+Worktrees can be anywhere, but setting Orca's workspace folder to the main
+checkout's parent keeps them together with the ones `wt new` makes. The `.env`
+link is relative, so it breaks if a worktree and its main checkout are moved
+apart. Don't list `.env` in Orca's `.worktreeinclude`: Orca would copy it, and the
+worktree would stop sharing the main checkout's.
 
 **`devenv setup`** runs `mise trust` and `mise install` if the checkout has a
 mise file, then one dependency install chosen by lockfile (pnpm, npm or yarn),
@@ -156,8 +191,9 @@ Postgres and these rules are the only state, so checkouts can be moved and
 repaired with ordinary tools.
 
 - Checkouts are at `~/<dir>` or `~/<group>/<dir>`, one folder level at most.
-- A worktree is next to its main checkout, at `<parent>/<name>`. Its name is its
-  directory's name, so nothing else records it.
+- `wt new` puts a worktree next to its main checkout, at `<parent>/<name>`. One
+  made by another tool can be anywhere git lists it. Its name is its directory's
+  name, so nothing else records it, and it's unique among the repo's worktrees.
 - A checkout's directory name must be unique on the machine, whatever its
   folder, because databases are named after it.
 - The template database is the local database the main checkout's env files
