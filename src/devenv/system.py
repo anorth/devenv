@@ -8,11 +8,14 @@ from devenv import rules
 from devenv.ui import Die
 
 
-def capture(cmd: list[str], stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+def capture(
+    cmd: list[str], stdin: str | None = None, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     """Run quietly and return the result. A missing command is an ordinary failure."""
     try:
         return subprocess.run(
             cmd,
+            cwd=cwd,
             input=stdin,
             capture_output=True,
             text=True,
@@ -33,6 +36,14 @@ def call(cmd: list[str], cwd: Path | None = None, stdin: IO[bytes] | None = None
         return subprocess.run(cmd, cwd=cwd, stdin=stdin).returncode == 0
     except OSError:
         return False
+
+
+def status(cmd: list[str]) -> int:
+    """Run with output going to the terminal, and return its exit status."""
+    try:
+        return subprocess.run(cmd).returncode
+    except OSError as err:
+        raise Die(f"can't run {cmd[0]}: {err}") from None
 
 
 def listening_ports() -> set[int]:

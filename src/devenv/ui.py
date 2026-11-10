@@ -26,15 +26,18 @@ def print_open_commands(host: str, path: Path) -> None:
     print(f"  zed ssh://{user}@{host}{path}")
 
 
-def guarded(command: Callable[[], None]) -> int:
-    """Run a command to an exit status, reporting failures as `devenv:` errors."""
+def guarded(command: Callable[[], int | None]) -> int:
+    """Run a command to an exit status, reporting failures as `devenv:` errors.
+
+    A command that runs another to completion can return that one's status.
+    """
     # Child processes write straight to the terminal, so ours must keep up.
     sys.stdout.reconfigure(line_buffering=True)
     try:
-        command()
+        result = command()
     except (Die, OSError) as err:
         print(f"devenv: {err}", file=sys.stderr, flush=True)
         return 1
     except KeyboardInterrupt:
         return 130
-    return 0
+    return result or 0

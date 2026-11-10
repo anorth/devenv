@@ -18,6 +18,8 @@ devenv wt rm <name> [--force]
 devenv wt ls
 devenv setup [<path>]
 devenv repo add <clone-url> [--dir <dir>|<group>/<dir>] [--db] [--no-setup] [--check]
+devenv apply
+devenv upgrade
 ```
 
 Every command has `--help`. The exit status is 0 on success, 1 on errors and 2
@@ -85,6 +87,35 @@ any existing checkout.
 
 The clone URL decides the access: HTTPS for a token, SSH for a deploy key.
 
+**`devenv apply`** brings the dev user's environment up to date. Run it as that
+user, not root. In order, it:
+
+1. clones `https://github.com/anorth/dotfiles` to `~/dotfiles` if it's missing,
+   and runs its `install.sh`. An existing clone is never pulled or reset;
+2. installs or upgrades mise's global tools: `node@lts`, `pnpm`, `uv` and `yq`;
+3. installs Claude Code and Cursor's CLI if they're missing (they update
+   themselves), and installs or upgrades Codex, pi, beads (`bd`) and beads-ui
+   through mise;
+4. merges `{"attribution": {"commit": "", "pr": ""}}` into
+   `~/.claude/settings.json`, and turns off commit and PR attribution in
+   `~/.cursor/cli-config.json`, keeping everything else in those files;
+5. installs Playwright's Chromium;
+6. writes the PATH (`~/bin`, `~/.local/bin` and mise's shims) to `~/.zshenv`,
+   which devenv owns, and to a marked block in `~/.bashrc`, which also sources
+   `~/.config/shell/common.sh`. If there's no `~/.zshrc`, it writes a minimal one.
+
+The `@latest` tools are upgraded on each run; nothing is pinned, and nothing is
+ever removed. A second run with nothing new changes no files. A failed optional
+step (the agent CLIs, Chromium) warns. A failed required step (dotfiles, mise's
+global tools, a settings file that isn't valid JSON, which is left as it is)
+makes `apply` exit 1 once the rest have run. A settings file that's a symlink
+is never written through: if it lacks the settings, `apply` warns and shows what
+to add. It ends with a count of warnings.
+
+**`devenv upgrade`** runs `uv tool upgrade devenv`, then the new version's
+`devenv apply`. It's how a machine picks up changes to devenv, including its tool
+lists and settings. If the upgrade fails, nothing is applied.
+
 ## Env files
 
 Each checkout or worktree has two files, both gitignored:
@@ -142,7 +173,7 @@ repaired with ordinary tools.
   claims.
 
 The machine needs Postgres running locally, with a superuser role named after
-the dev user, plus git, gh, jq, curl, mise, uv and Python 3.12 or later.
+the dev user, plus git, gh, jq, curl, mise, Node, uv and Python 3.12 or later.
 
 ## Developing
 

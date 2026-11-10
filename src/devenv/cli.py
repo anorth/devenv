@@ -3,6 +3,7 @@
 import argparse
 from pathlib import Path
 
+from devenv.apply import apply, upgrade
 from devenv.git import current_checkout
 from devenv.repos import add_repo, plan_checkout
 from devenv.setup import setup_checkout
@@ -48,6 +49,14 @@ def _repo_add(args: argparse.Namespace) -> None:
         log(f"This repo can be added at {path}")
     else:
         add_repo(args.clone_url, path, create_db=args.db, run_setup=args.setup)
+
+
+def _apply(args: argparse.Namespace) -> None:
+    apply()
+
+
+def _upgrade(args: argparse.Namespace) -> int:
+    return upgrade()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -163,6 +172,27 @@ def _parser() -> argparse.ArgumentParser:
         help="only check that the repo can be added here, without cloning",
     )
     add.set_defaults(run=_repo_add)
+
+    apply_cmd = commands.add_parser(
+        "apply",
+        help="install and update the dev user's tools, agent settings and shell files",
+        description="Bring the dev user's environment up to date: dotfiles, mise's global "
+        "tools, the agent CLIs and their settings, Playwright's Chromium, and the PATH in "
+        "~/.zshenv and ~/.bashrc. It only installs and updates, never removes, and a second "
+        "run changes nothing. A failed optional step (agent CLIs, Chromium) warns; a failed "
+        "required one (dotfiles, mise tools, agent settings, shell files) makes it exit 1 "
+        "after the rest have run. Run it as the dev user, not root.",
+    )
+    apply_cmd.set_defaults(run=_apply)
+
+    upgrade_cmd = commands.add_parser(
+        "upgrade",
+        help="upgrade devenv, then apply with the new version",
+        description="Upgrade devenv with uv tool upgrade, then run the new version's apply. "
+        "This is how a machine picks up changes to devenv and its tool lists. If the "
+        "upgrade fails, nothing is applied.",
+    )
+    upgrade_cmd.set_defaults(run=_upgrade)
     return parser
 
 
