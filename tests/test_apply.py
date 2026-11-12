@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import shutil
+import subprocess
 
 import pytest
 
@@ -65,7 +67,7 @@ def test_unterminated_block_is_refused():
 def home(machine):
     """A machine where every tool apply calls is a stub that logs its arguments."""
     log = machine.home.parent / "calls"
-    for tool in ["mise", "npx", "claude", "cursor-agent"]:
+    for tool in ["mise", "npx", "claude", "cursor-agent", "codex", "pi", "grok"]:
         machine.stub(tool, f'echo "{tool} $*" >> "{log}"')
     dotfiles = machine.home / "dotfiles"
     dotfiles.mkdir()
@@ -91,7 +93,8 @@ def test_apply_runs_every_step_and_a_second_run_changes_nothing(home):
     assert "mise use -g node@lts pnpm@latest uv@latest yq@latest" in calls
     assert "mise use -g --yes npm:beads-ui@latest" in calls
     assert "npx --yes playwright install chromium" in calls
-    assert not any(c.startswith(("claude", "cursor-agent")) for c in calls)
+    assert not any(c.startswith(("claude", "cursor-agent", "codex", "pi", "grok", "curl")) for c in calls)
+    assert not any("@openai/codex" in c or "pi-coding-agent" in c for c in calls)
 
     h = home.home
     assert (h / ".zshenv").read_text() == ZSHENV
@@ -158,8 +161,8 @@ def test_optional_failures_warn_and_required_ones_fail(home):
     result = home.run("apply")
     assert result.returncode == 1
     assert "required steps failed: mise tools" in result.stderr
-    # Four mise agent tools and Chromium also warned.
-    assert "apply finished with 6 warning(s)" in result.stdout
+    # Two mise agent tools and Chromium also warned.
+    assert "apply finished with 4 warning(s)" in result.stdout
 
 
 def test_a_missing_agent_cli_is_installed(home):
@@ -172,6 +175,22 @@ def test_a_missing_agent_cli_is_installed(home):
     calls = home.calls.read_text().splitlines()
     assert "curl -fsSL https://claude.ai/install.sh" in calls
     assert "installer ran" in calls
+
+
+def test_codex_from_mise_gets_its_own_installer_unattended(home):
+    (home.bin / "codex").unlink()
+    shims = home.home / ".local/share/mise/shims"
+    shims.mkdir(parents=True)
+    (shims / "codex").write_text("#!/bin/sh\n")
+    (shims / "codex").chmod(0o755)
+    home.env["PATH"] = f"{home.bin}:/usr/bin:/bin"
+    installer = f'echo "installer ran with $CODEX_NON_INTERACTIVE" >> {home.calls}'
+    home.stub("curl", f'echo "curl $*" >> "{home.calls}"; echo \'{installer}\'')
+    home.ok("apply")
+    calls = home.calls.read_text().splitlines()
+    assert "curl -fsSL https://chatgpt.com/codex/install.sh" in calls
+    assert "installer ran with 1" in calls
+    assert "curl -fsSL https://claude.ai/install.sh" not in calls
 
 
 def test_apply_refuses_root(monkeypatch):
@@ -224,3 +243,70 @@ def test_a_symlinked_settings_file_warns_with_what_to_add(home):
     target.write_text('{"model": "opus", "attribution": {"commit": "", "pr": ""}}\n')
     result = home.ok("apply")
     assert "apply finished with no warnings" in result.stdout
+
+
+def test_pi_installer_runs_without_a_terminal_or_mise_shims(home):
+    """Pi's installer prompts on /dev/tty, and refuses to replace a pi it didn't install."""
+    (home.bin / "pi").unlink()
+    shims = home.home / ".local/share/mise/shims"
+    shims.mkdir(parents=True)
+    (shims / "pi").write_text("#!/bin/sh\n")
+    (shims / "pi").chmod(0o755)
+    node_bin = home.home / ".local/share/mise/installs/node/24/bin"
+    home.stub("mise", f'[ "$1" = which ] && echo "{node_bin}/node"; exit 0')
+    home.env["PATH"] = f"{home.bin}:{shims}:/usr/bin:/bin"
+    installer = (
+        "if ( : <>/dev/tty ) 2>/dev/null; then t=tty; else t=no-tty; fi; "
+        "case :$PATH: in *mise/shims*) s=shims;; *) s=no-shims;; esac; "
+        f'case $PATH in "{node_bin}":*) n=node;; *) n=no-node;; esac; '
+        f'echo "pi installer: $t $s $n" >> {home.calls}'
+    )
+    home.stub("curl", f'echo "curl $*" >> "{home.calls}"; cat <<"EOF"\n{installer}\nEOF')
+    home.ok("apply")
+    calls = home.calls.read_text().splitlines()
+    assert "curl -fsSL https://pi.dev/install.sh" in calls
+    assert "pi installer: no-tty no-shims node" in calls
+
+
+def test_grok_installer_runs_with_a_shell_it_doesnt_know(home):
+    """So it doesn't add its block to ~/.zshrc or ~/.bashrc."""
+    (home.bin / "grok").unlink()
+    home.env["PATH"] = f"{home.bin}:/usr/bin:/bin"
+    home.env["SHELL"] = "/bin/zsh"
+    installer = f'echo "grok installer: $SHELL" >> {home.calls}'
+    home.stub("curl", f'echo "curl $*" >> "{home.calls}"; cat <<"EOF"\n{installer}\nEOF')
+    home.ok("apply")
+    calls = home.calls.read_text().splitlines()
+    assert "curl -fsSL https://x.ai/cli/install.sh" in calls
+    assert "grok installer: /bin/sh" in calls
+
+
+def dotfiles_checkout(home, origin):
+    """A dotfiles checkout under ~/projects, linked from ~/.zshrc, instead of ~/dotfiles."""
+    shutil.rmtree(home.home / "dotfiles")
+    checkout = home.home / "projects/dotfiles"
+    (checkout / "shell").mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True, env=home.env)
+    subprocess.run(["git", "-C", str(checkout), "remote", "add", "origin", origin], check=True)
+    (checkout / "shell/zshrc").write_text("mine\n")
+    (checkout / "install.sh").write_text(f'#!/bin/sh\necho "projects install.sh" >> "{home.calls}"\n')
+    (checkout / "install.sh").chmod(0o755)
+    (home.home / ".zshrc").symlink_to(checkout / "shell/zshrc")
+    # Only local clones, so a run that tries to clone the real dotfiles fails fast.
+    home.env["GIT_ALLOW_PROTOCOL"] = "file"
+
+
+def test_dotfiles_that_zshrc_links_into_are_used_instead_of_a_clone(home):
+    dotfiles_checkout(home, "git@github.com:anorth/dotfiles.git")
+    result = home.ok("apply")
+    assert "projects install.sh" in home.calls.read_text().splitlines()
+    assert "which ~/.zshrc links into" in result.stdout
+    assert not (home.home / "dotfiles").exists()
+
+
+def test_a_linked_checkout_of_another_repo_isnt_taken_for_the_dotfiles(home):
+    dotfiles_checkout(home, "git@github.com:someone/dotfiles.git")
+    result = home.run("apply")
+    assert result.returncode == 1
+    assert "couldn't clone https://github.com/anorth/dotfiles" in result.stderr
+    assert "projects install.sh" not in home.calls.read_text()

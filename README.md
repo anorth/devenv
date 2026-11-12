@@ -125,12 +125,15 @@ The clone URL decides the access: HTTPS for a token, SSH for a deploy key.
 **`devenv apply`** brings the dev user's environment up to date. Run it as that
 user, not root. In order, it:
 
-1. clones `https://github.com/anorth/dotfiles` to `~/dotfiles` if it's missing,
-   and runs its `install.sh`. An existing clone is never pulled or reset;
+1. runs the dotfiles' `install.sh`. They're `~/dotfiles`, or else the checkout
+   of `https://github.com/anorth/dotfiles` that `~/.zshrc` links into, wherever
+   it is. If there's neither, it clones them to `~/dotfiles`. An existing
+   checkout is never pulled or reset;
 2. installs or upgrades mise's global tools: `node@lts`, `pnpm`, `uv` and `yq`;
-3. installs Claude Code and Cursor's CLI if they're missing (they update
-   themselves), and installs or upgrades Codex, pi, beads (`bd`) and beads-ui
-   through mise;
+3. installs Claude Code, Cursor's CLI, Codex, pi and Grok Build (`grok`) with
+   their own installers if they're missing (they update themselves), and installs or upgrades beads
+   (`bd`) and beads-ui through mise. An agent CLI that's only a mise shim, from
+   an older devenv, counts as missing;
 4. merges `{"attribution": {"commit": "", "pr": ""}}` into
    `~/.claude/settings.json`, and turns off commit and PR attribution in
    `~/.cursor/cli-config.json`, keeping everything else in those files;

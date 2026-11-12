@@ -26,14 +26,24 @@ def capture(
         return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]} isn't installed")
 
 
-def call(cmd: list[str], cwd: Path | None = None, stdin: IO[bytes] | None = None) -> bool:
+def call(
+    cmd: list[str],
+    cwd: Path | None = None,
+    stdin: IO[bytes] | None = None,
+    env: dict[str, str] | None = None,
+    detach: bool = False,
+) -> bool:
     """Run with output going to the terminal; say whether it succeeded.
+
+    `detach` runs it in a new session, with no controlling terminal, so it
+    can't open /dev/tty to prompt. Its output still reaches the terminal.
 
     Failing to start counts as failing: a command can be missing, or a script
     can lack the shebang it needs to be executed.
     """
     try:
-        return subprocess.run(cmd, cwd=cwd, stdin=stdin).returncode == 0
+        result = subprocess.run(cmd, cwd=cwd, stdin=stdin, env=env, start_new_session=detach)
+        return result.returncode == 0
     except OSError:
         return False
 

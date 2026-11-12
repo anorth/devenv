@@ -241,3 +241,25 @@ def test_no_database_named():
 def test_named_database_stops_on_a_disagreement(url, host):
     with pytest.raises(rules.DatabaseConflict, match="DATABASE_URL names a, but DB_DATABASE names b"):
         rules.named_database(url, "b", host, "")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://github.com/anorth/dotfiles",
+        "https://github.com/anorth/dotfiles.git",
+        "https://github.com/anorth/dotfiles/",
+        "git@github.com:anorth/dotfiles.git",
+        "ssh://git@github.com/anorth/dotfiles.git",
+        "https://GitHub.com/Anorth/Dotfiles\n",
+    ],
+)
+def test_repo_id_is_the_same_for_every_form_of_a_url(url):
+    assert rules.repo_id(url) == "github.com/anorth/dotfiles"
+
+
+def test_repo_id_tells_repos_apart():
+    assert rules.repo_id("git@github.com:anorth/dotfiles") != rules.repo_id(
+        "git@github.com:someone/dotfiles"
+    )
+    assert rules.repo_id("file:///tmp/x/dotfiles.git") == "/tmp/x/dotfiles"

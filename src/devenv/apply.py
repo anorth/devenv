@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from devenv import rules
 from devenv.system import call, capture, status
 from devenv.ui import Die, log, warn
 
@@ -23,17 +24,38 @@ DOTFILES_DIR = "dotfiles"
 # Installed with one `mise use -g`. Required.
 MISE_TOOLS = ["node@lts", "pnpm@latest", "uv@latest", "yq@latest"]
 
-# Command name and installer URL. They update themselves, so they're installed
-# only when missing. Optional.
+
+@dataclass(frozen=True)
+class Installer:
+    """A vendor's install script, piped from curl to the shell its docs name."""
+
+    url: str
+    shell: str = "bash"
+    env: dict[str, str] = field(default_factory=dict)
+    # Run with no controlling terminal, for an installer that prompts on
+    # /dev/tty whenever it can open it and has no setting to stop that.
+    detach: bool = False
+
+
+# They update themselves, so they're installed only when missing. Optional.
 AGENT_INSTALLERS = {
-    "claude": "https://claude.ai/install.sh",
-    "cursor-agent": "https://cursor.com/install",
+    "claude": Installer("https://claude.ai/install.sh"),
+    "cursor-agent": Installer("https://cursor.com/install"),
+    # Without this it asks on the terminal whether to start Codex.
+    "codex": Installer(
+        "https://chatgpt.com/codex/install.sh", shell="sh", env={"CODEX_NON_INTERACTIVE": "1"}
+    ),
+    # Grok Build. It links grok and agent into ~/.local/bin (taking agent from
+    # Cursor's, which is fine). A $SHELL it doesn't know is the only way to stop
+    # it adding a block to ~/.zshrc or ~/.bashrc, which it writes through a
+    # symlink into the dotfiles.
+    "grok": Installer("https://x.ai/cli/install.sh", env={"SHELL": "/bin/sh"}),
+    # It asks what to do, and whether to start pi, on the terminal.
+    "pi": Installer("https://pi.dev/install.sh", shell="sh", detach=True),
 }
 
 # Each is its own `mise use -g`, so one failing doesn't stop the others. Optional.
 MISE_AGENT_TOOLS = [
-    ["npm:@openai/codex@latest"],
-    ["npm:@mariozechner/pi-coding-agent@latest"],
     # bd from its GitHub release: the npm package fetches the binary in a
     # postinstall script, which mise's npm installs don't run.
     ["github:steveyegge/beads@latest"],
@@ -158,12 +180,39 @@ def _mise_use(args: list[str]) -> bool:
     return call(["mise", "use", "-g", *args])
 
 
+def _linked_dotfiles(home: Path) -> Path | None:
+    """The dotfiles checkout that ~/.zshrc links into, wherever it is.
+
+    That's how a machine with its dotfiles somewhere other than ~/dotfiles
+    keeps them: cloning a second copy would relink ~/.zshrc and the rest away
+    from the one being edited.
+    """
+    zshrc = home / ".zshrc"
+    if not zshrc.is_symlink():
+        return None
+    target_dir = Path(os.path.realpath(zshrc)).parent
+    if not target_dir.is_dir():
+        return None
+    top = capture(["git", "-C", str(target_dir), "rev-parse", "--show-toplevel"])
+    if top.returncode != 0:
+        return None
+    checkout = Path(top.stdout.strip())
+    origin = capture(["git", "-C", str(checkout), "remote", "get-url", "origin"])
+    if origin.returncode != 0 or rules.repo_id(origin.stdout) != rules.repo_id(DOTFILES_URL):
+        return None
+    return checkout
+
+
 def apply_dotfiles(home: Path, run: Run) -> None:
     """Clone the dotfiles if they're missing, then run their installer.
 
-    An existing clone is never pulled or reset: it's the user's to manage.
+    They're ~/dotfiles, or else the checkout ~/.zshrc links into. An existing
+    checkout is never pulled or reset: it's the user's to manage.
     """
     dotfiles = home / DOTFILES_DIR
+    if not (dotfiles.exists() or dotfiles.is_symlink()) and (linked := _linked_dotfiles(home)):
+        log(f"Using the dotfiles at {linked}, which ~/.zshrc links into")
+        dotfiles = linked
     if not (dotfiles.exists() or dotfiles.is_symlink()):
         log(f"Cloning {DOTFILES_URL} to {dotfiles}")
         if not call(["git", "clone", DOTFILES_URL, str(dotfiles)]):
@@ -186,16 +235,51 @@ def apply_mise_tools(home: Path, run: Run) -> None:
         )
 
 
+def _mise_shims(home: Path) -> Path:
+    return home / ".local/share/mise/shims"
+
+
+def _installed_outside_mise(home: Path, command: str) -> bool:
+    """Whether a command is on PATH, not counting mise's shims.
+
+    An agent CLI that devenv used to install through mise has a shim, but its
+    own installer should still run.
+    """
+    found = shutil.which(command)
+    return found is not None and Path(found).parent != _mise_shims(home)
+
+
+def _installer_path(home: Path) -> str:
+    """PATH for the installers: mise's shims left out, mise's node put in by its real directory.
+
+    A shim left from devenv's old mise installs would otherwise look like a
+    conflicting install (pi's installer refuses to replace one). Pi's needs node.
+    """
+    shims = str(_mise_shims(home))
+    dirs = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d.rstrip("/") != shims]
+    node = capture(["mise", "which", "node"], cwd=home)
+    if node.returncode == 0 and node.stdout.strip():
+        dirs.insert(0, str(Path(node.stdout.strip()).parent))
+    return os.pathsep.join(dirs)
+
+
 def apply_agent_clis(home: Path, run: Run) -> None:
     """Install missing agent CLIs, and install or upgrade the ones from mise."""
-    for command, url in AGENT_INSTALLERS.items():
-        if shutil.which(command):
+    # Some installers link into ~/.local/bin only if it's already there.
+    (home / ".local/bin").mkdir(parents=True, exist_ok=True)
+    path = None
+    for command, installer in AGENT_INSTALLERS.items():
+        if _installed_outside_mise(home, command):
             log(f"{command} is installed (it updates itself)")
             continue
-        log(f"Installing {command} from {url}")
+        log(f"Installing {command} from {installer.url}")
+        path = path or _installer_path(home)
+        env = {**os.environ, **installer.env, "PATH": path}
         # The one place a shell runs: vendor installers are piped from curl.
-        if not call(["bash", "-o", "pipefail", "-c", f"curl -fsSL {url} | bash"], cwd=home):
-            run.optional_failed(f"couldn't install {command} from {url}")
+        script = f"curl -fsSL {installer.url} | {installer.shell}"
+        cmd = ["bash", "-o", "pipefail", "-c", script]
+        if not call(cmd, cwd=home, env=env, detach=installer.detach):
+            run.optional_failed(f"couldn't install {command} from {installer.url}")
     for args in MISE_AGENT_TOOLS:
         log(f"mise use -g {' '.join(args)}")
         if not _mise_use(args):

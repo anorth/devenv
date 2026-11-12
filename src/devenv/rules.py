@@ -21,6 +21,16 @@ def repo_name(clone_url: str) -> str:
     return re.split(r"[/:]", clone_url.rstrip("/"))[-1].removesuffix(".git")
 
 
+def repo_id(clone_url: str) -> str:
+    """A clone URL as host/path, so https://, ssh:// and git@host: forms of one repo compare equal."""
+    url = clone_url.strip().rstrip("/").removesuffix(".git")
+    if m := re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*://(?:[^@/]*@)?(.*)", url):
+        url = m[1]
+    elif m := re.fullmatch(r"(?:[^@/]*@)?([^:/]+):(.*)", url):
+        url = f"{m[1]}/{m[2]}"
+    return url.lower()
+
+
 def valid_checkout_dir(path: str) -> bool:
     """Whether a path under home fits the layout: <dir> or <group>/<dir>."""
     return re.fullmatch(rf"({_DIR_PART}/)?{_DIR_PART}", path) is not None
